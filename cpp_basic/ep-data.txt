@@ -1,0 +1,7 @@
+Focal length of objective: 400 mm
+  f eyepiece magnification
+        24.0             17
+        35.0             11
+        50.0              8
+        70.0              6
+       200.0              2

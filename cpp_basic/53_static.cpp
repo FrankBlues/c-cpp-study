@@ -1,0 +1,39 @@
+//using a static local variable
+#include <iostream>
+
+using namespace std;
+
+const int ArSize = 10;
+
+void strcount(const char *str);
+
+int main()
+{
+    char input[ArSize];
+    char next;
+    cout << "Enter a line: \n";
+    cin.get(input, ArSize);
+    while (cin)
+    {
+        cin.get(next);
+        while (next != '\n')
+            cin.get(next);
+        strcount(input);
+        cout << "Enter next line (empty line to quit): \n";
+        cin.get(input, ArSize);
+    }
+    cout << "Bye\n";
+    return 0;
+}
+
+void strcount(const char *str)
+{
+    static int total = 0; //再下次调用之前 total值不变
+    int count = 0;
+    cout << "\"" << str << "\" contains ";
+    while (*str++)
+        count++;
+    total += count;
+    cout << count << " characters \n";
+    cout << total << " characters total \n";
+}
