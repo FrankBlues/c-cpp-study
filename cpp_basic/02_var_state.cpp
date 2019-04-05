@@ -4,13 +4,14 @@ using namespace std;
 
 //变量声明
 
-extern int a,b;
+extern int a, b;
 extern int c;
 extern float f;
 
-int main(){
+int main()
+{
     //定义
-    int a,b;
+    int a, b;
     int c;
     float f;
     //初始化
@@ -20,11 +21,8 @@ int main(){
 
     cout << c << endl;
 
-    f = 70/3.0;
+    f = 70 / 3.0;
     cout << f << endl;
-
-
-
 
     return 0;
 }
