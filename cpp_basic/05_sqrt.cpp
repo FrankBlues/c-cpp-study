@@ -8,8 +8,8 @@ int main()
     double in;
     cout << "enter a number" << endl;
     cin >> in;
-    double  q = sqrt(in);
-    cout << "square root of input value is " << q 
-         << "." <<endl;
+    double q = sqrt(in);
+    cout << "square root of input value is " << q
+         << "." << endl;
     return 0;
 }
