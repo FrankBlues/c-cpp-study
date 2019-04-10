@@ -13,11 +13,11 @@ int main()
 
     cout << "starting \a\n";
     clock_t start = clock();
+    int i = 1;
     while (clock() - start < delay)
         ;
     cout << "done.\a\n";
 
     return 0;
 }
-
 

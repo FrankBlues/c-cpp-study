@@ -2,11 +2,12 @@
 
 using namespace std;
 
-int main(){
+int main()
+{
 
     int *pt = new int; //运行时分配内存
     *pt = 1011;
-    cout << "int value = " << *pt <<endl;
+    cout << "int value = " << *pt << endl;
     cout << "mem location : " << pt << endl;
 
     double *pd = new double;
@@ -15,8 +16,8 @@ int main(){
     cout << "double value pd = " << *pd << endl;
     cout << "mem location : " << pd << endl;
 
-    cout << "size of pt = " << sizeof (pt) << endl;
-    cout << "size of *pt = " << sizeof (*pt) << endl;
+    cout << "size of pt = " << sizeof(pt) << endl;
+    cout << "size of *pt = " << sizeof(*pt) << endl;
 
     cout << "size of pd = " << sizeof pd << endl;
     cout << "size of *pd = " << sizeof(*pd) << endl;
