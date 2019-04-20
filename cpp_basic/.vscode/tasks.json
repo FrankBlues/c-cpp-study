@@ -19,7 +19,10 @@
                  "-g",
                  "-o",
                  "/home/mlm/cpp/a.out",
-                 "01_helloWorld.cpp"
+                 "playground.cpp",
+                 "-lgdal",
+                 "-L",
+                 "/usr/local/lib"
              ],
              "group": {
                  "kind": "build",
