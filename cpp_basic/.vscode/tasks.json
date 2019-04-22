@@ -12,17 +12,14 @@
      },
      "tasks": [
          {
-             "label": "build hello world on WSL",
+             "label": "build cpp program on WSL",
              "type": "shell",
              "command": "g++",
              "args": [
                  "-g",
                  "-o",
                  "/home/mlm/cpp/a.out",
-                 "playground.cpp",
-                 "-lgdal",
-                 "-L",
-                 "/usr/local/lib"
+                 "_playground.cpp"
              ],
              "group": {
                  "kind": "build",
