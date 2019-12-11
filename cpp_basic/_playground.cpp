@@ -1,17 +1,18 @@
 #include <iostream>
-#include "sales_data.h"
-
+/*
+ * 简单循环, 计算输入数据和
+ */
 int main()
 {
-    sales_data book1, book2;
-    book1.name = 'a';
-    book1.price = 15.9;
-    book1.numbers = 5;
-    book2.name = 'b';
-    book2.price = 19.9;
-    book2.numbers = 4;
-    std::cout << "book1 and book2 total sales:"
-              << book1.price * book1.numbers + book2.price * book2.numbers
-              << std::endl;
+    // 提示输入两个数
+    std::cout << "Enter numbers: " << std::endl;
+    int value = 0, sum = 0;
+    // 文件结束符(win ctrl+z,  unix ctrl+d) 或遇到无效输入时结束(非int)
+    while (std::cin >> value)
+    {
+        std::cout << "value: " << value << std::endl;
+        sum += value;
+    }
+    std::cout << "Sum is " << sum << std::endl;
     return 0;
 }
