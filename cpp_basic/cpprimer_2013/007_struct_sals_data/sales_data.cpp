@@ -1,18 +1,15 @@
 #include <iostream>
+#include "sales_data.h"
 
 using namespace std;
 
 int main()
 {
-    char c = 'M';
-    int i = c;
-    cout << "character " << c << " sascii code is: " << i << endl;
-    cout << "dispaly char using cout.put():" << endl;
-    cout.put(c);
-    cout << endl;
-    cout << "display ! directly using cout << :" << '!' << endl;
-    cout << "display ! using cout.put():";
-    cout.put('!');
+    double price = 0;
+    sales_data data1, data2;
+    cin >> data1.name >> data1.numbers >> data1.price;
+    double data1_revenue = data1.numbers * data1.price;
+    cout << data1_revenue;
     cout << endl;
     return 0;
 }
