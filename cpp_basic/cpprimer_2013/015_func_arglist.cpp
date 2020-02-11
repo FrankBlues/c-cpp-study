@@ -13,7 +13,8 @@ int sum_all(initializer_list<int> a)
 
 int main()
 {
-   initializer_list<int> a({1, 2, 3, 4, 5});
+    //initializer_list<int> a({1, 2, 3, 4, 5})
+   initializer_list<int> a{1, 2, 3, 4, 5};
    cout << sum_all(a);
    cout << endl;
    return 0;

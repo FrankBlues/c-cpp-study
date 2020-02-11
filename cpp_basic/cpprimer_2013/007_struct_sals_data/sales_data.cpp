@@ -7,8 +7,8 @@ int main()
 {
     double price = 0;
     sales_data data1, data2;
-    cin >> data1.name >> data1.numbers >> data1.price;
-    double data1_revenue = data1.numbers * data1.price;
+    cin >> data1.bookNo >> data1.units_sold >> price;
+    double data1_revenue = data1.units_sold * price;
     cout << data1_revenue;
     cout << endl;
     return 0;
