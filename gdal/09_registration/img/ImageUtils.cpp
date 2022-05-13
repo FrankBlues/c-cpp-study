@@ -1,0 +1,5810 @@
+/*
+ *  ImageUtils.cpp
+ *  _LIB
+ *
+ *  Created by Pete Bunting on 23/04/2008.
+ *  Copyright 2008 Lib.
+ * 
+ *  Lib is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, either version 3 of the License, or
+ *  (at your option) any later version.
+ *
+ *  Lib is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with Lib.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ */
+
+#include "ImageUtils.h"
+
+
+ImageUtils::ImageUtils(double resDiffThresh)
+{
+        this->resDiffThresh = resDiffThresh;
+}
+
+void ImageUtils::snap2ImageGrid(GDALDataset *dataset, OGREnvelope *env)
+{
+    double outMinX = 0.0;
+    double outMaxX = 0.0;
+    double outMinY = 0.0;
+    double outMaxY = 0.0;
+
+    double *imgTransform = new double[6];
+    dataset->GetGeoTransform(imgTransform);
+
+    double pxlXRes = imgTransform[1];
+    double pxlYRes = abs(imgTransform[5]);
+
+    double tlX = imgTransform[0];
+    double tlY = imgTransform[3];
+
+    double absDiffMinX = abs(tlX - env->MinX);
+    double absDiffMaxY = abs(tlY - env->MaxY);
+
+    unsigned int nXPxls = ceil((absDiffMinX / pxlXRes)+0.5);
+    unsigned int nYPxls = ceil((absDiffMaxY / pxlYRes)+0.5);
+
+    if(tlX > env->MinX)
+    {
+        outMinX = tlX - (nXPxls * pxlXRes);
+    }
+    else
+    {
+        outMinX = tlX + (nXPxls * pxlXRes);
+    }
+
+    if(tlY > env->MaxY)
+    {
+        outMaxY = tlY - (nYPxls * pxlYRes);
+    }
+    else
+    {
+        outMaxY = tlY + (nYPxls * pxlYRes);
+    }
+
+    unsigned int envWidthPxls = ceil(((env->MaxX - env->MinX)/pxlXRes)+0.5);
+    unsigned int envHeightPxls = ceil(((env->MaxY - env->MinY)/pxlYRes)+0.5);
+
+    outMaxX = outMinX + (envWidthPxls * pxlXRes);
+    outMinY = outMaxY - (envHeightPxls * pxlYRes);
+
+    env->MinX = outMinX;
+    env->MaxX = outMaxX;
+    env->MinY = outMinY;
+    env->MaxY = outMaxY;
+}
+
+
+void ImageUtils::getImageOverlap(GDALDataset **datasets, int numDS, int **dsOffsets, int *width, int *height, double *gdalTransform) 
+{
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    bool first = true;
+    const char *proj = NULL;
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            if(transformations[i] == NULL)
+            {
+                throw ImageBandException("No projection transformation has been provided..");
+            }
+            
+            if(first)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    std::cout << "Not all image bands have the same projection" << std::endl;
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+        }
+
+        if(maxX - minX <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+        
+        double diffX = 0;
+        double diffY = 0;
+        for(int i = 0; i < numDS; i++)
+        {
+            diffX = minX - transformations[i][0];
+            diffY = transformations[i][3] - maxY;
+
+            if(!((diffX > -0.0001) & (diffX < 0.0001)))
+            {
+                dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][0] = 0;
+            }
+            
+            if(!((diffY > -0.0001) & (diffY < 0.0001)))
+            {
+                dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][1] = 0;
+            }
+        }
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        tmpMaxX = 0;
+        tmpMinY = 0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                (*width) = (*width) - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                (*height) = (*height) - nPxl;
+            }
+        }
+        
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImageOverlap(std::vector<GDALDataset*> *datasets, int **dsOffsets, int *width, int *height, double *gdalTransform) 
+{
+    unsigned int numDS = datasets->size();
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets->at(i)->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets->at(i)->GetRasterXSize();
+        ySize[i] = datasets->at(i)->GetRasterYSize();
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    bool first = true;
+    const char *proj = NULL;
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            if(transformations[i] == NULL)
+            {
+                throw ImageBandException("No projection transformation has been provided..");
+            }
+            
+            if(first)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets->at(i)->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(std::string(datasets->at(i)->GetProjectionRef()) != std::string(proj))
+                {
+                    std::cout << "Not all image bands have the same projection" << std::endl;
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+        
+        double diffX = 0;
+        double diffY = 0;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            diffX = minX - transformations[i][0];
+            diffY = transformations[i][3] - maxY;
+            
+            if(!((diffX > -0.0001) & (diffX < 0.0001)))
+            {
+                dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][0] = 0;
+            }
+            
+            if(!((diffY > -0.0001) & (diffY < 0.0001)))
+            {
+                dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][1] = 0;
+            }
+        }
+        
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        tmpMaxX = 0;
+        tmpMinY = 0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                (*width) = (*width) - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                (*height) = (*height) - nPxl;
+            }
+        }
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImageOverlap(GDALDataset **datasets, int numDS,  int **dsOffsets, int *width, int *height, double *gdalTransform, int *maxBlockX, int *maxBlockY) 
+{
+    std::cout.precision(12);
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    int *xBlockSize = new int[numDS];
+    int *yBlockSize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+        datasets[i]->GetRasterBand(1)->GetBlockSize(&xBlockSize[i], &yBlockSize[i]);
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    bool first = true;
+    const char *proj = NULL;
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {                
+            if(transformations[i] == NULL)
+            {
+                throw ImageBandException("No projection transformation has been provided..");
+            }
+            
+            if(first)
+            {
+                *maxBlockX = xBlockSize[i];
+                *maxBlockY = yBlockSize[i];
+                
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {                    
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    std::cout << "Not all image bands have the same projection" << std::endl;
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+                
+                if(xBlockSize[i] > (*maxBlockX))
+                {
+                    *maxBlockX = xBlockSize[i];
+                }
+                
+                if(yBlockSize[i] > (*maxBlockY))
+                {
+                    *maxBlockY = yBlockSize[i];
+                }
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+        
+        double diffX = 0;
+        double diffY = 0;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            diffX = minX - transformations[i][0];
+            diffY = transformations[i][3] - maxY;
+            
+            if(!((diffX > -0.0001) & (diffX < 0.0001)))
+            {
+                dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][0] = 0;
+            }
+            
+            if(!((diffY > -0.0001) & (diffY < 0.0001)))
+            {
+                dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][1] = 0;
+            }
+        }
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        tmpMaxX = 0;
+        tmpMinY = 0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                (*width) = (*width) - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                (*height) = (*height) - nPxl;
+            }
+        }
+        
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImageOverlap(std::vector<GDALDataset*> *datasets,  int **dsOffsets, int *width, int *height, double *gdalTransform, int *maxBlockX, int *maxBlockY) 
+{
+    unsigned int numDS = datasets->size();
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    int *xBlockSize = new int[numDS];
+    int *yBlockSize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets->at(i)->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets->at(i)->GetRasterXSize();
+        ySize[i] = datasets->at(i)->GetRasterYSize();
+        datasets->at(i)->GetRasterBand(1)->GetBlockSize(&xBlockSize[i], &yBlockSize[i]);
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    bool first = true;
+    const char *proj = NULL;
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            if(transformations[i] == NULL)
+            {
+                throw ImageBandException("No projection transformation has been provided..");
+            }
+            
+            if(first)
+            {
+                *maxBlockX = xBlockSize[i];
+                *maxBlockY = yBlockSize[i];
+                
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets->at(i)->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(std::string(datasets->at(i)->GetProjectionRef()) != std::string(proj))
+                {
+                    std::cout << "Not all image bands have the same projection" << std::endl;
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+                
+                if(xBlockSize[i] > (*maxBlockX))
+                {
+                    *maxBlockX = xBlockSize[i];
+                }
+                
+                if(yBlockSize[i] > (*maxBlockY))
+                {
+                    *maxBlockY = yBlockSize[i];
+                }
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+        
+        double diffX = 0;
+        double diffY = 0;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            diffX = minX - transformations[i][0];
+            diffY = transformations[i][3] - maxY;
+            
+            if(!((diffX > -0.0001) & (diffX < 0.0001)))
+            {
+                dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][0] = 0;
+            }
+            
+            if(!((diffY > -0.0001) & (diffY < 0.0001)))
+            {
+                dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][1] = 0;
+            }
+        }
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        tmpMaxX = 0;
+        tmpMinY = 0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                (*width) = (*width) - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                (*height) = (*height) - nPxl;
+            }
+        }
+        
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImageOverlap(GDALDataset **datasets, int numDS,  int **dsOffsets, int *width, int *height, double *gdalTransform, OGREnvelope *env) 
+{
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    const char *proj = NULL;
+    bool first = true;
+    
+    
+    try
+    {
+        // Calculate Image Overlap.
+        for(int i = 0; i < numDS; ++i)
+        {
+            if(first)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    throw ImageBandException("Not all image bands have the same projection..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+        }
+
+        if(maxX - minX <= 0)
+        {
+            std::cout << "MinX = " << minX << std::endl;
+            std::cout << "MaxX = " << maxX << std::endl;
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            std::cout << "MinY = " << minY << std::endl;
+            std::cout << "MaxY = " << maxY << std::endl;
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        
+        // Check if OK to process.
+        // Changed from throwing exception (left old code) - Dan
+        bool process = true;
+        
+        if(minX > env->MinX)
+        {
+            process = false;
+        }
+        
+        if(minY > env->MinY)
+        {
+            process = false;
+        }
+        
+        if(maxX < env->MaxX)
+        {
+            process = false;
+        }
+        
+        if(maxY < env->MaxY)
+        {
+            process = false;
+        }
+        
+        if(process)
+        {
+            // Trim to the envelope
+            minX = env->MinX;
+            maxX = env->MaxX;
+            minY = env->MinY;
+            maxY = env->MaxY;
+            
+            // Define output values.
+            gdalTransform[0] = minX;
+            gdalTransform[1] = pixelXRes;
+            gdalTransform[2] = rotateX;
+            gdalTransform[3] = maxY;
+            gdalTransform[4] = rotateY;
+            gdalTransform[5] = pixelYRes;
+            
+            *width = floor(((maxX - minX)/pixelXRes)+0.5);
+            *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+            
+            double diffX = 0;
+            double diffY = 0;
+            
+            for(int i = 0; i < numDS; i++)
+            {
+                diffX = minX - transformations[i][0];
+                diffY = transformations[i][3] - maxY;
+                
+                if(!((diffX > -0.0001) & (diffX < 0.0001)))
+                {
+                    dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+                }
+                else
+                {
+                    dsOffsets[i][0] = 0;
+                }
+                
+                if(!((diffY > -0.0001) & (diffY < 0.0001)))
+                {
+                    dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+                }
+                else
+                {
+                    dsOffsets[i][1] = 0;
+                }
+            }
+        }
+        /* Commented out else statement, this was added to fix problem with cut2poly but caused problems with zonal stats commands
+            * It has therefore been commented out - Dan Clewley 24/01/11 
+            * Update (16/03/11) - Dan Clewley
+            * - The uncommented code fixed the problem of a polygon that was larger than the image but caused problems when
+            *  the polygon was outside the scene.
+            * - If the polygon does not fit inside the scene the center is calculated, if this is within the scene it calculates the overlap.
+            * Update (09/12/13) - Pete Bunting
+            * Uncommented lines, doesn't seem to be causing problems.
+            */
+        else
+        {				
+            // Calculate centre of envelope
+            double centreEnvelopeX = (env->MaxX + env->MinX) / 2.0;
+            double centreEnvelopeY = (env->MaxY + env->MinY) / 2.0;
+            
+            if((centreEnvelopeX < maxX) && (centreEnvelopeY < maxY)) // If center of envolope within overlap proceed
+            {
+                // Define output values.
+                gdalTransform[0] = minX;
+                gdalTransform[1] = pixelXRes;
+                gdalTransform[2] = rotateX;
+                gdalTransform[3] = maxY;
+                gdalTransform[4] = rotateY;
+                gdalTransform[5] = pixelYRes;
+                
+                *width = floor(((maxX - minX)/pixelXRes)+0.5);
+                *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+                
+                double diffX = 0;
+                double diffY = 0;
+                
+                for(int i = 0; i < numDS; i++)
+                {
+                    diffX = minX - transformations[i][0];
+                    diffY = transformations[i][3] - maxY;
+                    
+                    if(!((diffX > -0.0001) & (diffX < 0.0001)))
+                    {
+                        dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+                    }
+                    else
+                    {
+                        dsOffsets[i][0] = 0;
+                    }
+                    
+                    if(!((diffY > -0.0001) & (diffY < 0.0001)))
+                    {
+                        dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+                    }
+                    else
+                    {
+                        dsOffsets[i][1] = 0;
+                    }
+                }
+            }
+        }
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        double tmpMaxX = 0;
+        double tmpMinY = 0;
+        double diffX = 0.0;
+        double diffY = 0.0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                (*width) = (*width) - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                (*height) = (*height) - nPxl;
+            }
+        }
+        
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImageOverlapCut2Env(GDALDataset **datasets, int numDS,  int **dsOffsets, int *width, int *height, double *gdalTransform, OGREnvelope *env) 
+{
+    this->snap2ImageGrid(datasets[0], env);
+
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    const char *proj = NULL;
+    bool first = true;
+    
+    
+    try
+    {
+        // Calculate Image Overlap.
+        for(int i = 0; i < numDS; ++i)
+        {
+            if(first)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    throw ImageBandException("Not all image bands have the same projection..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            std::cout << "MinX = " << minX << std::endl;
+            std::cout << "MaxX = " << maxX << std::endl;
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            std::cout << "MinY = " << minY << std::endl;
+            std::cout << "MaxY = " << maxY << std::endl;
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        
+        // Cut to env extent
+        if(env->MinX > minX)
+        {
+            minX = env->MinX;
+        }
+        
+        if(env->MinY > minY)
+        {
+            minY = env->MinY;
+        }
+        
+        if(env->MaxX < maxX)
+        {
+            maxX = env->MaxX;
+        }
+        
+        if(env->MaxY < maxY)
+        {
+            maxY = env->MaxY;
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            std::cout << "MinX = " << minX << std::endl;
+            std::cout << "MaxX = " << maxX << std::endl;
+            throw ImageBandException("Images and Envelope do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            std::cout << "MinY = " << minY << std::endl;
+            std::cout << "MaxY = " << maxY << std::endl;
+            throw ImageBandException("Images and Envelope do not overlap in the Y axis");
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+        
+        double diffX = 0;
+        double diffY = 0;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            diffX = minX - transformations[i][0];
+            diffY = transformations[i][3] - maxY;
+            
+            if(!((diffX > -0.0001) & (diffX < 0.0001)))
+            {
+                dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][0] = 0;
+            }
+            
+            if(!((diffY > -0.0001) & (diffY < 0.0001)))
+            {
+                dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][1] = 0;
+            }
+        }
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        double tmpMaxX = 0;
+        double tmpMinY = 0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                (*width) = (*width) - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                (*height) = (*height) - nPxl;
+            }
+        }
+        
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImageOverlapCut2Env(GDALDataset **datasets, int numDS,  int **dsOffsets, int *width, int *height, double *gdalTransform, OGREnvelope *env, int *maxBlockX, int *maxBlockY) 
+{
+    this->snap2ImageGrid(datasets[0], env);
+
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    int *xBlockSize = new int[numDS];
+    int *yBlockSize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+        datasets[i]->GetRasterBand(1)->GetBlockSize(&xBlockSize[i], &yBlockSize[i]);
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    const char *proj = NULL;
+    bool first = true;
+    
+    try
+    {
+        // Calculate Image Overlap.
+        for(int i = 0; i < numDS; ++i)
+        {
+            if(first)
+            {
+                *maxBlockX = xBlockSize[i];
+                *maxBlockY = yBlockSize[i];
+                
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    throw ImageBandException("Not all image bands have the same projection..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+                
+                if(xBlockSize[i] > (*maxBlockX))
+                {
+                    *maxBlockX = xBlockSize[i];
+                }
+                
+                if(yBlockSize[i] > (*maxBlockY))
+                {
+                    *maxBlockY = yBlockSize[i];
+                }
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            std::cout << "MinX = " << minX << std::endl;
+            std::cout << "MaxX = " << maxX << std::endl;
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            std::cout << "MinY = " << minY << std::endl;
+            std::cout << "MaxY = " << maxY << std::endl;
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        // Cut to env extent
+        if(env->MinX > minX)
+        {
+            minX = env->MinX;
+        }
+        
+        if(env->MinY > minY)
+        {
+            minY = env->MinY;
+        }
+        
+        if(env->MaxX < maxX)
+        {
+            maxX = env->MaxX;
+        }
+        
+        if(env->MaxY < maxY)
+        {
+            maxY = env->MaxY;
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            std::cout << "MinX = " << minX << std::endl;
+            std::cout << "MaxX = " << maxX << std::endl;
+            throw ImageBandException("Images and Envelope do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            std::cout << "MinY = " << minY << std::endl;
+            std::cout << "MaxY = " << maxY << std::endl;
+            throw ImageBandException("Images and Envelope do not overlap in the Y axis");
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+        
+        double diffX = 0;
+        double diffY = 0;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            diffX = minX - transformations[i][0];
+            diffY = transformations[i][3] - maxY;
+            
+            if(!((diffX > -0.0001) & (diffX < 0.0001)))
+            {
+                dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][0] = 0;
+            }
+            
+            if(!((diffY > -0.0001) & (diffY < 0.0001)))
+            {
+                dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][1] = 0;
+            }
+        }
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        tmpMaxX = 0;
+        tmpMinY = 0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                (*width) = (*width) - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                (*height) = (*height) - nPxl;
+            }
+        }
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+    
+    delete[] xBlockSize;
+    delete[] yBlockSize;
+}
+
+void ImageUtils::getImageOverlap(GDALDataset **datasets, int numDS, int *width, int *height, OGREnvelope *env) 
+{
+    this->snap2ImageGrid(datasets[0], env);
+
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    const char *proj = NULL;
+    bool first = true;
+    
+    try
+    {
+        
+        // Calculate Image Overlap.
+        for(int i = 0; i < numDS; i++)
+        {
+            if(first)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    throw ImageBandException("Not all image bands have the same projection..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        // Trim to the envelope
+        if(minX > env->MinX)
+        {
+            throw ImageBandException("Envelope does not fit within the image overlap (MinX)");
+        }
+        
+        if(minY > env->MinY)
+        {
+            throw ImageBandException("Envelope does not fit within the image overlap (MinY)");
+        }
+        
+        if(maxX < env->MaxX)
+        {
+            throw ImageBandException("Envelope does not fit within the image overlap (MaxX)");
+        }
+        
+        if(maxY < env->MaxY)
+        {
+            throw ImageBandException("Envelope does not fit within the image overlap (MaxY)");
+        }
+        
+        minX = env->MinX;
+        maxX = env->MaxX;
+        minY = env->MinY;
+        maxY = env->MaxY;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImageOverlap(GDALDataset **datasets, int numDS, OGREnvelope *env) 
+{
+    this->snap2ImageGrid(datasets[0], env);
+
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    const char *proj = NULL;
+    bool first = true;
+    
+    try
+    {
+        
+        // Calculate Image Overlap.
+        for(int i = 0; i < numDS; i++)
+        {
+            if(first)
+            {
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(transformations[i][5] < 0)
+                {
+                    transformations[i][5] = transformations[i][5] * (-1);
+                }
+
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * transformations[i][1]);
+                minY = maxY - (ySize[i] * transformations[i][5]);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    std::cerr << "WARNING: \'" << datasets[i]->GetFileList()[0] << "\' does not have the same projection...\n";
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                if(transformations[i][5] < 0)
+                {
+                    transformations[i][5] = transformations[i][5] * (-1);
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * transformations[i][1]);
+                tmpMinY = transformations[i][3] - (ySize[i] * transformations[i][5]);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            std::cout << "X: [" << minX << ", " << maxX << "]\n";
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            std::cout << "Y: [" << minY << ", " << maxY << "]\n";
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+        
+        env->MinX = minX;
+        env->MaxX = maxX;
+        env->MinY = minY;
+        env->MaxY = maxY;
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImagesExtent(GDALDataset **datasets, int numDS, int *width, int *height, double *gdalTransform) 
+{
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    const char *proj = NULL;
+    bool first = true;
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            if(first)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    throw ImageBandException("Not all image bands have the same projection..");
+                }
+                
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] < minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] > maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX > maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY < minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImagesExtent(std::string *inputImages, int numDS, int *width, int *height, double *gdalTransform) 
+{
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    GDALDataset *dataset = NULL;
+    for(int i = 0; i < numDS; i++)
+    {
+        dataset = (GDALDataset *) GDALOpenShared(inputImages[i].c_str(), GA_ReadOnly);
+        if(dataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + inputImages[i];
+            throw ImageException(message.c_str());
+        }
+        
+        transformations[i] = new double[6];
+        dataset->GetGeoTransform(transformations[i]);
+        xSize[i] = dataset->GetRasterXSize();
+        ySize[i] = dataset->GetRasterYSize();
+        
+        GDALClose(dataset);
+    }
+    
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    std::string proj = "";
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            dataset = (GDALDataset *) GDALOpenShared(inputImages[i].c_str(), GA_ReadOnly);
+            if(dataset == NULL)
+            {
+                std::string message = std::string("Could not open image ") + inputImages[i];
+                throw ImageException(message.c_str());
+            }
+            
+            if(i == 0)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = std::string(dataset->GetProjectionRef()); // Get projection of first band in image
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(std::string(dataset->GetProjectionRef()) != proj)
+                {
+                    std::cout << "First: (" << i << ")" << proj << std::endl;
+                    std::cout << "Dataset: (" << i << ")" << std::string(dataset->GetProjectionRef()) << std::endl;
+                    throw ImageBandException("Not all image bands have the same projection..");
+                }
+                
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] < minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] > maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX > maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY < minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+            GDALClose(dataset);
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImagesExtent(std::vector<std::string> inputImages, int *width, int *height, double *gdalTransform) 
+{
+    int numDS = inputImages.size();
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    GDALDataset *dataset = NULL;
+    for(int i = 0; i < numDS; i++)
+    {
+        dataset = (GDALDataset *) GDALOpenShared(inputImages.at(i).c_str(), GA_ReadOnly);
+        if(dataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + inputImages.at(i);
+            throw ImageException(message.c_str());
+        }
+        
+        transformations[i] = new double[6];
+        dataset->GetGeoTransform(transformations[i]);
+        xSize[i] = dataset->GetRasterXSize();
+        ySize[i] = dataset->GetRasterYSize();
+        
+        GDALClose(dataset);
+    }
+    
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    std::string proj = "";
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            dataset = (GDALDataset *) GDALOpenShared(inputImages.at(i).c_str(), GA_ReadOnly);
+            if(dataset == NULL)
+            {
+                std::string message = std::string("Could not open image ") + inputImages.at(i);
+                throw ImageException(message.c_str());
+            }
+            
+            if(i == 0)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = std::string(dataset->GetProjectionRef()); // Get projection of first band in image
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(std::string(dataset->GetProjectionRef()) != proj)
+                {
+                    std::cout << "First: (" << i << ")" << proj << std::endl;
+                    std::cout << "Dataset: (" << i << ")" << std::string(dataset->GetProjectionRef()) << std::endl;
+                    throw ImageBandException("Not all image bands have the same projection..");
+                }
+                
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(transformations[i][0] < minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] > maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX > maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY < minY)
+                {
+                    minY = tmpMinY;
+                }
+            }
+            GDALClose(dataset);
+        }
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+}
+
+void ImageUtils::getImagePixelOverlaps(GDALDataset **datasets, int numDS, int **dsOffsets, unsigned int *width, unsigned int *height) 
+{
+    std::cout.precision(12);
+    double **transformations = new double*[numDS];
+    int *xSize = new int[numDS];
+    int *ySize = new int[numDS];
+    int *xBlockSize = new int[numDS];
+    int *yBlockSize = new int[numDS];
+    for(int i = 0; i < numDS; i++)
+    {
+        transformations[i] = new double[6];
+        datasets[i]->GetGeoTransform(transformations[i]);
+        xSize[i] = datasets[i]->GetRasterXSize();
+        ySize[i] = datasets[i]->GetRasterYSize();
+        datasets[i]->GetRasterBand(1)->GetBlockSize(&xBlockSize[i], &yBlockSize[i]);
+    }
+    double rotateX = 0;
+    double rotateY = 0;
+    double pixelXRes = 0;
+    double pixelYRes = 0;
+    double pixelYResPos = 0;
+    double minX = 0;
+    double maxX = 0;
+    double tmpMaxX = 0;
+    double minY = 0;
+    double tmpMinY = 0;
+    double maxY = 0;
+    bool first = true;
+    const char *proj = NULL;
+    double *gdalTransform = new double[6];
+    
+    try
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            if(transformations[i] == NULL)
+            {
+                throw ImageBandException("No projection transformation has been provided..");
+            }
+            
+            if(first)
+            {
+                pixelXRes = transformations[i][1];
+                pixelYRes = transformations[i][5];
+                
+                rotateX = transformations[i][2];
+                rotateY = transformations[i][4];
+                
+                if(pixelYRes < 0)
+                {
+                    pixelYResPos = pixelYRes * (-1);
+                }
+                else
+                {
+                    pixelYResPos = pixelYRes;
+                }
+                
+                minX = transformations[i][0];
+                maxY = transformations[i][3];
+                
+                maxX = minX + (xSize[i] * pixelXRes);
+                minY = maxY - (ySize[i] * pixelYResPos);
+                
+                proj = datasets[i]->GetProjectionRef(); // Get projection of first band in image
+                
+                first = false;
+            }
+            else
+            {
+                if((this->closeResTest(pixelXRes, transformations[i][1]) == false) | (this->closeResTest(pixelYRes, transformations[i][5]) == false))
+                {
+                    throw ImageBandException("Not all image bands have the same resolution..");
+                }
+                
+                if(transformations[i][2] != rotateX & transformations[i][4] != rotateY)
+                {
+                    throw ImageBandException("Not all image bands have the same rotation..");
+                }
+                
+                if(std::string(datasets[i]->GetProjectionRef()) != std::string(proj))
+                {
+                    std::cout << "Not all image bands have the same projection" << std::endl;
+                }
+                    
+                if(transformations[i][0] > minX)
+                {
+                    minX = transformations[i][0];
+                }
+                
+                if(transformations[i][3] < maxY)
+                {
+                    maxY = transformations[i][3];
+                }
+                
+                tmpMaxX = transformations[i][0] + (xSize[i] * pixelXRes);
+                tmpMinY = transformations[i][3] - (ySize[i] * pixelYResPos);
+                
+                if(tmpMaxX < maxX)
+                {
+                    maxX = tmpMaxX;
+                }
+                
+                if(tmpMinY > minY)
+                {
+                    minY = tmpMinY;
+                }
+                
+            }
+        }
+        
+        if(maxX - minX <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the X axis");
+        }
+        
+        if(maxY - minY <= 0)
+        {
+            throw ImageBandException("Images do not overlap in the Y axis");
+        }
+    
+        
+        gdalTransform[0] = minX;
+        gdalTransform[1] = pixelXRes;
+        gdalTransform[2] = rotateX;
+        gdalTransform[3] = maxY;
+        gdalTransform[4] = rotateY;
+        gdalTransform[5] = pixelYRes;
+        
+        *width = floor(((maxX - minX)/pixelXRes)+0.5);
+        *height = floor(((maxY - minY)/pixelYResPos)+0.5);
+        
+        double diffX = 0;
+        double diffY = 0;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            diffX = minX - transformations[i][0];
+            diffY = transformations[i][3] - maxY;
+            
+            if(!((diffX > -0.0001) & (diffX < 0.0001)))
+            {
+                dsOffsets[i][0] = floor((diffX/pixelXRes)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][0] = 0;
+            }
+            
+            if(!((diffY > -0.0001) & (diffY < 0.0001)))
+            {
+                dsOffsets[i][1] = floor((diffY/pixelYResPos)+0.5);
+            }
+            else
+            {
+                dsOffsets[i][1] = 0;
+            }
+        }
+        
+        double tmpMinX = 0;
+        double tmpMaxY = 0;
+        tmpMaxX = 0;
+        tmpMinY = 0;
+        
+        double maxDiffX = 0;
+        double maxDiffY = 0;
+        bool foundXDiff = false;
+        bool foundYDiff = false;
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            tmpMinX = transformations[i][0] + (dsOffsets[i][0] * pixelXRes);
+            tmpMaxY = transformations[i][3] - (dsOffsets[i][1] * pixelYResPos);
+            
+            tmpMaxX = tmpMinX + ((*width)*pixelXRes);
+            tmpMinY = tmpMaxY - ((*height)*pixelYResPos);
+            
+            if(tmpMaxX > maxX)
+            {
+                diffX = (tmpMaxX - maxX);
+                if(!foundXDiff)
+                {
+                    maxDiffX = diffX;
+                    foundXDiff = true;
+                }
+                else if(diffX > maxDiffX)
+                {
+                    maxDiffX = diffX;
+                }
+            }
+            
+            if(tmpMinY < minY)
+            {
+                diffY = (minY - tmpMinY);
+                if(!foundYDiff)
+                {
+                    maxDiffY = diffY;
+                    foundYDiff = true;
+                }
+                else if(diffY > maxDiffY)
+                {
+                    maxDiffY = diffY;
+                }
+            }
+        }
+        
+        if(foundXDiff)
+        {
+            int nPxl = floor((maxDiffX/pixelXRes)+0.5);
+            if(nPxl > 0)
+            {
+                width = width - nPxl;
+            }
+        }
+        
+        if(foundYDiff)
+        {
+            int nPxl = floor((maxDiffY/pixelYResPos)+0.5);
+            if(nPxl > 0)
+            {
+                height = height - nPxl;
+            }
+        }
+        
+        for(int i = 0; i < numDS; i++)
+        {
+            dsOffsets[i][2] = dsOffsets[i][0] + *width;
+            dsOffsets[i][3] = dsOffsets[i][1] + *height;
+        }
+        
+    }
+    catch(ImageBandException& e)
+    {
+        if(transformations != NULL)
+        {
+            for(int i = 0; i < numDS; i++)
+            {
+                delete[] transformations[i];
+            }
+            delete[] transformations;
+        }
+        if(xSize != NULL)
+        {
+            delete[] xSize;
+        }
+        if(ySize != NULL)
+        {
+            delete[] ySize;
+        }
+        if(gdalTransform != NULL)
+        {
+            delete[] gdalTransform;
+        }
+        throw e;
+    }
+    
+    if(transformations != NULL)
+    {
+        for(int i = 0; i < numDS; i++)
+        {
+            delete[] transformations[i];
+        }
+        delete[] transformations;
+    }
+    if(xSize != NULL)
+    {
+        delete[] xSize;
+    }
+    if(ySize != NULL)
+    {
+        delete[] ySize;
+    }
+    if(gdalTransform != NULL)
+    {
+        delete[] gdalTransform;
+    }
+}
+
+OGREnvelope* ImageUtils::getSpatialExtent(GDALDataset *dataset) 
+{
+    OGREnvelope *env = new OGREnvelope();
+    try
+    {
+        double *gdalTranslation = new double[6];
+        dataset->GetGeoTransform(gdalTranslation);
+        
+        double minX = gdalTranslation[0];
+        double maxY = gdalTranslation[3];
+        double maxX = minX + (dataset->GetRasterXSize() * gdalTranslation[1]);
+        double minY = maxY + (dataset->GetRasterYSize() * gdalTranslation[5]);
+        
+        env->MinX = minX;
+        env->MaxX = maxX;
+        env->MinY = minY;
+        env->MaxY = maxY;
+    }
+    catch(ImageBandException &e)
+    {
+        delete env;
+        throw e;
+    }
+    
+    return env;
+}
+
+
+bool ImageUtils::doImageSpatAndExtMatch(GDALDataset **datasets, int numDS) 
+{
+    bool match = true;
+    try
+    {
+        double *gdalTransRef = new double[6];
+        datasets[0]->GetGeoTransform(gdalTransRef);
+        int heightRef = datasets[0]->GetRasterYSize();
+        int widthRef = datasets[0]->GetRasterXSize();
+        
+        double *gdalTransSec = new double[6];
+        int heightSec = 0;
+        int widthSec = 0;
+
+        for(int i = 1; i < numDS; i++)
+        {
+            datasets[i]->GetGeoTransform(gdalTransSec);
+            heightSec = datasets[i]->GetRasterYSize();
+            widthSec = datasets[i]->GetRasterXSize();
+            
+            if(heightRef != heightSec)
+            {
+                match = false;
+                break;
+            }
+            
+            if(widthRef != widthSec)
+            {
+                match = false;
+                break;
+            }
+            
+            for(int j = 0; j < 6; ++j)
+            {
+                if(gdalTransRef[j] != gdalTransSec[j])
+                {
+                    match = false;
+                    break;
+                }
+            }
+            
+            if(!match)
+            {
+                break;
+            }
+        }
+        
+        delete[] gdalTransRef;
+        delete[] gdalTransSec;
+        
+    }
+    catch (ImageBandException &e)
+    {
+        throw e;
+    }
+    catch(std::exception &e)
+    {
+        throw ImageBandException(e.what());
+    }
+    
+    return match;
+}
+
+
+
+void ImageUtils::exportImageToTextCol(GDALDataset *image, int band, std::string outputText)
+{
+    ImageUtils imgUtils;
+    double *gdalTranslation = new double[6];
+    float *inputData = NULL;
+    
+    GDALRasterBand *inputRasterBand = NULL;
+    
+    int width = 0;
+    int height = 0;
+    int numberOfBands = 0;
+    
+    try
+    {
+        width = image->GetRasterXSize();
+        height = image->GetRasterYSize();
+        numberOfBands = image->GetRasterCount();
+        
+        if(band == 0)
+        {
+            band++;
+        }
+        else if(band > numberOfBands)
+        {
+            throw ImageBandException("There are not enough bands within the image.");
+        }
+        
+        // Create textfile
+        std::ofstream outFile(outputText.c_str(), std::ios::out | std::ios::trunc);
+        
+        if(!outFile.is_open())
+        {
+            throw OutputStreamException("Could not open text file.");
+        }
+        
+        // Allocate memory
+        inputData = (float *) CPLMalloc(sizeof(float)*width);
+        
+        // Get Raster band
+        inputRasterBand = image->GetRasterBand(band);
+        
+        rsgis_tqdm pbar;
+        // Loop images to process data
+        for(int i = 0; i < height; i++)
+        {
+            pbar.progress(i, height);
+            inputRasterBand->RasterIO(GF_Read, 0, i, width, 1, inputData, width, 1, GDT_Float32, 0, 0);
+            
+            for(int j = 0; j < width; j++)
+            {
+                // Output to text file...
+                outFile << inputData[j] << std::endl;
+            }
+        }
+        pbar.finish();
+    }
+    catch(ImageBandException &e)
+    {
+        
+        throw e;
+    }
+    catch(OutputStreamException &e)
+    {
+        
+        throw e;
+    }
+    
+    if(gdalTranslation != NULL)
+    {
+        delete[] gdalTranslation;
+    }
+    if(inputData != NULL)
+    {
+        delete inputData;
+    }
+}
+
+GDALDataset* ImageUtils::createBlankImage(std::string imageFile, double *transformation, int xSize, int ySize, int numBands, std::string projection, float value, std::string gdalFormat, GDALDataType imgDataType)
+{
+    GDALAllRegister();
+    GDALDriver *poDriver = NULL;
+    GDALDataset *outputImage = NULL;
+    GDALRasterBand **outputRasterBands = NULL;
+    
+    float **imgData = NULL;
+    
+    if(transformation[1] <= 0)
+    {
+        throw ImageException("The resolution of the image needs to be > 0.");
+    }
+    if(numBands <= 0)
+    {
+        throw ImageException("The number of bands needs to be > 0.");
+    }
+    
+    try
+    {
+        if(xSize <= 0)
+        {
+            throw ImageException("The image needs to have a xSize > 0");
+        }
+        if(ySize <= 0)
+        {
+            throw ImageException("The image needs to have a ySize > 0");
+        }
+        
+        poDriver = GetGDALDriverManager()->GetDriverByName(gdalFormat.c_str());
+        if(poDriver == NULL)
+        {
+            throw ImageException("Image driver is not available.");
+        }
+        
+        // Create new file. 
+        char **papszOptions = this->getGDALCreationOptionsForFormat(gdalFormat);
+        outputImage = poDriver->Create(imageFile.c_str(), xSize, ySize, numBands, imgDataType, papszOptions);
+        
+        if(outputImage == NULL)
+        {
+            throw ImageException("Image could not be created.");
+        }
+        outputImage->SetGeoTransform(transformation);
+        outputImage->SetProjection(projection.c_str());
+        
+        this->assignValGDALDataset(outputImage, value);
+    }
+    catch(ImageBandException &e)
+    {
+        if(transformation != NULL)
+        {
+            delete transformation;
+        }
+        if(outputRasterBands != NULL)
+        {
+            delete[] outputRasterBands;
+        }
+        
+        if(imgData != NULL)
+        {
+            for(int i = 0; i < numBands; i++)
+            {
+                if(imgData[i] != NULL)
+                {
+                    CPLFree(imgData[i]);
+                }
+            }
+            delete[] imgData;
+        }
+        throw e;
+    }
+    catch(ImageException &e)
+    {
+        if(transformation != NULL)
+        {
+            delete transformation;
+        }
+        if(outputRasterBands != NULL)
+        {
+            delete[] outputRasterBands;
+        }
+        
+        if(imgData != NULL)
+        {
+            for(int i = 0; i < numBands; i++)
+            {
+                if(imgData[i] != NULL)
+                {
+                    CPLFree(imgData[i]);
+                }
+            }
+            delete[] imgData;
+        }
+        throw e;
+    }
+    
+    if(outputRasterBands != NULL)
+    {
+        delete[] outputRasterBands;
+    }
+    
+    if(imgData != NULL)
+    {
+        for(int i = 0; i < numBands; i++)
+        {
+            if(imgData[i] != NULL)
+            {
+                CPLFree(imgData[i]);
+            }
+        }
+        delete[] imgData;
+    }
+    
+    
+    return outputImage;
+}
+
+GDALDataset* ImageUtils::createBlankImage(std::string imageFile, double *transformation, int xSize, int ySize, int numBands, std::string projection, float value, std::vector<std::string> bandNames, std::string gdalFormat, GDALDataType imgDataType)
+{
+    GDALAllRegister();
+    GDALDriver *poDriver = NULL;
+    GDALDataset *outputImage = NULL;
+    GDALRasterBand **outputRasterBands = NULL;
+    
+    float **imgData = NULL;
+    
+    if(transformation[1] <= 0)
+    {
+        throw ImageException("The resolution of the image needs to be > 0.");
+    }
+    if(numBands <= 0)
+    {
+        throw ImageException("The number of bands needs to be > 0.");
+    }
+    
+    try
+    {
+        if(xSize <= 0)
+        {
+            throw ImageException("The image needs to have a xSize > 0");
+        }
+        if(ySize <= 0)
+        {
+            throw ImageException("The image needs to have a ySize > 0");
+        }
+        
+        poDriver = GetGDALDriverManager()->GetDriverByName(gdalFormat.c_str());
+        if(poDriver == NULL)
+        {
+            throw ImageException("Image driver is not available.");
+        }
+        
+        // Create new file.
+        char **papszOptions = this->getGDALCreationOptionsForFormat(gdalFormat);
+        outputImage = poDriver->Create(imageFile.c_str(), xSize, ySize, numBands, imgDataType, papszOptions);
+        
+        if(outputImage == NULL)
+        {
+            throw ImageException("Image could not be created.");
+        }
+        outputImage->SetGeoTransform(transformation);
+        outputImage->SetProjection(projection.c_str());
+        
+        this->assignValGDALDataset(outputImage, value);
+    }
+    catch(ImageBandException &e)
+    {
+        if(transformation != NULL)
+        {
+            delete transformation;
+        }
+        if(outputRasterBands != NULL)
+        {
+            delete[] outputRasterBands;
+        }
+        
+        if(imgData != NULL)
+        {
+            for(int i = 0; i < numBands; i++)
+            {
+                if(imgData[i] != NULL)
+                {
+                    CPLFree(imgData[i]);
+                }
+            }
+            delete[] imgData;
+        }
+        throw e;
+    }
+    catch(ImageException &e)
+    {
+        if(transformation != NULL)
+        {
+            delete transformation;
+        }
+        if(outputRasterBands != NULL)
+        {
+            delete[] outputRasterBands;
+        }
+        
+        if(imgData != NULL)
+        {
+            for(int i = 0; i < numBands; i++)
+            {
+                if(imgData[i] != NULL)
+                {
+                    CPLFree(imgData[i]);
+                }
+            }
+            delete[] imgData;
+        }
+        throw e;
+    }
+    
+    if(outputRasterBands != NULL)
+    {
+        delete[] outputRasterBands;
+    }
+    
+    if(imgData != NULL)
+    {
+        for(int i = 0; i < numBands; i++)
+        {
+            if(imgData[i] != NULL)
+            {
+                CPLFree(imgData[i]);
+            }
+        }
+        delete[] imgData;
+    }
+    
+    
+    return outputImage;
+}
+
+GDALDataset* ImageUtils::createBlankImage(std::string imageFile, OGREnvelope extent, double resolution, int numBands, std::string projection, float value, std::string gdalFormat, GDALDataType imgDataType)
+{
+    GDALAllRegister();
+    GDALDriver *poDriver = NULL;
+    GDALDataset *outputImage = NULL;
+    
+    float *imgData = NULL;
+    double *transformation = NULL;
+    int xSize = 0;
+    int ySize = 0;
+    
+    if(resolution <= 0)
+    {
+        throw ImageException("The resolution of the image needs to be > 0.");
+    }
+    if(numBands <= 0)
+    {
+        throw ImageException("The number of bands needs to be > 0.");
+    }
+    
+    try
+    {
+        xSize = ceil((extent.MaxX - extent.MinX)/resolution);
+        ySize = ceil((extent.MaxY - extent.MinY)/resolution);
+        
+        if(xSize <= 0)
+        {
+            throw ImageException("The image needs to have a xSize > 0");
+        }
+        if(ySize <= 0)
+        {
+            throw ImageException("The image needs to have a ySize > 0");
+        }
+        
+        transformation = new double[6];
+        transformation[0] = extent.MinX;
+        transformation[1] = resolution;
+        transformation[2] = 0;
+        transformation[3] = extent.MaxY;
+        transformation[4] = 0;
+        transformation[5] = resolution * (-1);
+        
+        poDriver = GetGDALDriverManager()->GetDriverByName(gdalFormat.c_str());
+        if(poDriver == NULL)
+        {
+            throw ImageException("Image driver is not available.");
+        }
+        
+        // Create new file.
+        char **papszOptions = this->getGDALCreationOptionsForFormat(gdalFormat);
+        outputImage = poDriver->Create(imageFile.c_str(), xSize, ySize, numBands, imgDataType, papszOptions);
+        
+        if(outputImage == NULL)
+        {
+            throw ImageException("Image could not be created.");
+        }
+        
+        std::cout << "Projection = " << projection << std::endl;
+        
+        outputImage->SetGeoTransform(transformation);
+        outputImage->SetProjection(projection.c_str());
+        
+        this->assignValGDALDataset(outputImage, value);
+    }
+    catch(ImageBandException &e)
+    {
+        if(transformation != NULL)
+        {
+            delete transformation;
+        }
+        if(imgData != NULL)
+        {
+            delete imgData;
+        }
+        throw e;
+    }
+    catch(ImageException &e)
+    {
+        if(transformation != NULL)
+        {
+            delete transformation;
+        }
+        if(imgData != NULL)
+        {
+            delete imgData;
+        }
+        throw e;
+    }
+    
+    if(transformation != NULL)
+    {
+        delete transformation;
+    }
+    if(imgData != NULL)
+    {
+        delete imgData;
+    }
+    
+    return outputImage;
+}
+
+void ImageUtils::exportImageBands(std::string imageFile, std::string outputFilebase, std::string format)
+{
+    GDALAllRegister();
+    GDALDataset *dataset = NULL;
+    GDALDriver *gdalDriver = NULL;
+    GDALRasterBand *inputImgBand = NULL;
+    GDALRasterBand *outputImgBand = NULL;
+    GDALDataset *outputImage = NULL;
+    std::string outImageFile = "";
+    std::stringstream *outStrStream;
+    double *transformation = new double[6];
+    float *imageData = NULL;
+    char **gdalDriverMetaInfo;
+    
+    try
+    {
+        std::cout << imageFile << std::endl;
+        dataset = (GDALDataset *) GDALOpenShared(imageFile.c_str(), GA_ReadOnly);
+        if(dataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + imageFile;
+            throw ImageException(message.c_str());
+        }
+        
+        gdalDriver = GetGDALDriverManager()->GetDriverByName(format.c_str());
+        if(gdalDriver == NULL)
+        {
+            std::string message = format + std::string(" image driver is not available.");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat(format);
+        
+        gdalDriverMetaInfo = gdalDriver->GetMetadata();
+        if(CSLFetchBoolean(gdalDriverMetaInfo, GDAL_DCAP_CREATE, FALSE ))
+        {
+            std::cout << "Driver for " << format << " supports CreateCopy\n";
+        }
+        else
+        {
+            throw ImageException("Image driver does not support create. Therefore cannot create file of this type.");
+        }
+        
+        
+        int numBands = dataset->GetRasterCount();
+        int xSize = dataset->GetRasterXSize();
+        int ySize = dataset->GetRasterYSize();
+        dataset->GetGeoTransform(transformation);
+        imageData = (float *) CPLMalloc(sizeof(float)*xSize);
+        
+        for(int i = 1; i <= numBands; i++)
+        {
+            std::cout << "Outputting band " << i << " of " << numBands << std::endl;
+            outStrStream = new std::stringstream();
+            *outStrStream << outputFilebase << "_b" << i << ".tif";
+            outImageFile = outStrStream->str();
+            std::cout << "File: " << outImageFile << std::endl;
+            outputImage = gdalDriver->Create(outImageFile.c_str(), xSize, ySize, 1, GDT_Float32, papszOptions);
+            
+            if(outputImage == NULL)
+            {
+                throw ImageException("Image could not be created.");
+            }
+            outputImage->SetGeoTransform(transformation);
+            outputImage->SetProjection(dataset->GetProjectionRef());
+            
+            inputImgBand = dataset->GetRasterBand(i);
+            outputImgBand = outputImage->GetRasterBand(1);
+            for(int j = 0; j < ySize; j++)
+            {
+                inputImgBand->RasterIO(GF_Read, 0, j, xSize, 1, imageData, xSize, 1, GDT_Float32, 0, 0);
+                outputImgBand->RasterIO(GF_Write, 0, j, xSize, 1, imageData, xSize, 1, GDT_Float32, 0, 0);
+            }
+            GDALClose(outputImage);
+            delete outStrStream;
+        }
+        GDALClose(dataset);
+    }
+    catch(ImageException &e)
+    {
+        
+        throw e;
+    }
+}
+
+void ImageUtils::exportImageStack(std::string *inputImages, std::string *outputImages, std::string outputFormat, int numImages) 
+{
+    GDALAllRegister();
+    GDALDataset **inDatasets = NULL;
+    GDALDriver *gdalDriver = NULL;
+    GDALDataset *outputImageDS = NULL;
+    GDALRasterBand *inputRasterBand = NULL;
+    GDALRasterBand *outputRasterBand = NULL;
+    
+    float *data = NULL;
+    double *gdalTranslation = new double[6];
+    int **dsOffsets = new int*[numImages];
+    for(int i = 0; i < numImages; i++)
+    {
+        dsOffsets[i] = new int[2];
+    }
+    int stackHeight = 0;
+    int stackWidth = 0;
+    int numOutBands = 0;
+    
+    try
+    {
+        // Create new Image
+        gdalDriver = GetGDALDriverManager()->GetDriverByName(outputFormat.c_str());
+        if(gdalDriver == NULL)
+        {
+            std::string message = std::string("Driver for ") + outputFormat + std::string(" does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat(outputFormat);
+        
+        inDatasets = new GDALDataset*[numImages];
+        for(int i = 0; i < numImages; i++)
+        {
+            std::cout << inputImages[i] << std::endl;
+            inDatasets[i] = (GDALDataset *) GDALOpenShared(inputImages[i].c_str(), GA_ReadOnly);
+            if(inDatasets[i] == NULL)
+            {
+                std::string message = std::string("Could not open image ") + inputImages[i];
+                throw ImageException(message.c_str());
+            }
+        }
+        
+        // Find image overlap
+        this->getImageOverlap(inDatasets, numImages, dsOffsets, &stackWidth, &stackHeight, gdalTranslation);
+        
+        std::cout << "Stack Height = " << stackHeight << std::endl;
+        std::cout << "Stack Width = " << stackWidth << std::endl;
+        
+        data = (float *) CPLMalloc(sizeof(float)*stackWidth);
+        
+        for(int i = 0; i < numImages; i++)
+        {
+            std::cout << "Converting image " << inputImages[i] << std::endl;
+            numOutBands = inDatasets[i]->GetRasterCount();
+            
+            outputImageDS = gdalDriver->Create(outputImages[i].c_str(), stackWidth, stackHeight, numOutBands, GDT_Float32, papszOptions);
+            
+            outputImageDS->SetGeoTransform(gdalTranslation);
+            outputImageDS->SetProjection(inDatasets[0]->GetProjectionRef());
+            
+            for(int n = 1; n <= numOutBands; n++)
+            {
+                std::cout << "Image Band " << n << " of " << numOutBands << std::endl;
+                
+                inputRasterBand = inDatasets[i]->GetRasterBand(n);
+                outputRasterBand = outputImageDS->GetRasterBand(n);
+                
+                rsgis_tqdm pbar;
+                for(int m = 0; m < stackHeight; m++)
+                {
+                    pbar.progress(m, stackHeight);
+                    inputRasterBand->RasterIO(GF_Read, dsOffsets[i][0], (dsOffsets[i][1]+m), stackWidth, 1, data, stackWidth, 1, GDT_Float32, 0, 0);						
+                    outputRasterBand->RasterIO(GF_Write, 0, m, stackWidth, 1, data, stackWidth, 1, GDT_Float32, 0, 0);
+                }
+                pbar.finish();
+            }
+            GDALClose(outputImageDS);
+        }
+        
+        for(int i = 0; i < numImages; i++)
+        {
+            GDALClose(inDatasets[i]);
+        }
+        delete inDatasets;
+        delete data;
+        delete[] gdalTranslation;
+        
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::exportImageStackWithMask(std::string *inputImages, std::string *outputImages, std::string imageMask, std::string outputFormat, int numImages, float maskValue) 
+{
+    GDALAllRegister();
+    GDALDataset **inDatasets = NULL;
+    GDALDriver *gdalDriver = NULL;
+    GDALDataset *outputImageDS = NULL;
+    GDALRasterBand *imageMaskBand = NULL;
+    GDALRasterBand *inputRasterBand = NULL;
+    GDALRasterBand *outputRasterBand = NULL;
+    
+    float *data = NULL;
+    float *mask = NULL;
+    double *gdalTranslation = new double[6];
+    int **dsOffsets = NULL;
+    int stackHeight = 0;
+    int stackWidth = 0;
+    int numOutBands = 0;
+    numImages++; //include image mask
+    
+    try
+    {
+        // Create new Image
+        gdalDriver = GetGDALDriverManager()->GetDriverByName(outputFormat.c_str());
+        if(gdalDriver == NULL)
+        {
+            std::string message = std::string("Driver for ") + outputFormat + std::string(" does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat(outputFormat);
+        
+        inDatasets = new GDALDataset*[numImages];
+        std::cout << imageMask << std::endl;
+        inDatasets[0] = (GDALDataset *) GDALOpenShared(imageMask.c_str(), GA_ReadOnly);
+        if(inDatasets[0] == NULL)
+        {
+            std::string message = std::string("Could not open image ") + imageMask;
+            throw ImageException(message.c_str());
+        }
+        for(int i = 1; i < numImages; i++)
+        {
+            std::cout << inputImages[i-1] << std::endl;
+            inDatasets[i] = (GDALDataset *) GDALOpenShared(inputImages[i-1].c_str(), GA_ReadOnly);
+            if(inDatasets[i] == NULL)
+            {
+                std::string message = std::string("Could not open image ") + inputImages[i-1];
+                throw ImageException(message.c_str());
+            }
+        }
+                    
+        dsOffsets = new int*[numImages];
+        for(int i = 0; i < numImages; i++)
+        {
+            dsOffsets[i] = new int[2];
+        }
+        
+        // Find image overlap
+        this->getImageOverlap(inDatasets, numImages, dsOffsets, &stackWidth, &stackHeight, gdalTranslation);
+        
+        std::cout << "Stack Height = " << stackHeight << " Width = " << stackWidth << std::endl;
+        
+        data = (float *) CPLMalloc(sizeof(float)*stackWidth);
+        mask = (float *) CPLMalloc(sizeof(float)*stackWidth);
+        imageMaskBand = inDatasets[0]->GetRasterBand(1);
+        for(int i = 1; i < numImages; i++)
+        {
+            std::cout << "Converting image " << inputImages[i-1] << std::endl;
+            numOutBands = inDatasets[i]->GetRasterCount();
+            outputImageDS = gdalDriver->Create(outputImages[i-1].c_str(), stackWidth, stackHeight, numOutBands, GDT_Float32, papszOptions);
+            outputImageDS->SetGeoTransform(gdalTranslation);
+            outputImageDS->SetProjection(inDatasets[0]->GetProjectionRef());
+            
+            for(int n = 1; n <= numOutBands; n++)
+            {
+                std::cout << "Image Band " << n << " of " << numOutBands << std::endl;
+                inputRasterBand = inDatasets[i]->GetRasterBand(n);
+                outputRasterBand = outputImageDS->GetRasterBand(n);
+                
+                int feedback = stackHeight/10;
+                int feedbackCounter = 0;
+                std::cout << "Started" << std::flush;
+                
+                for(int m = 0; m < stackHeight; m++)
+                {
+                    if((m % feedback) == 0)
+                    {
+                        std::cout << ".." << feedbackCounter << ".." << std::flush;
+                        feedbackCounter = feedbackCounter + 10;
+                    }
+                    
+                    inputRasterBand->RasterIO(GF_Read, dsOffsets[i][0], (dsOffsets[i][1]+m), stackWidth, 1, data, stackWidth, 1, GDT_Float32, 0, 0);
+                    imageMaskBand->RasterIO(GF_Read, dsOffsets[0][0], (dsOffsets[0][1]+m), stackWidth, 1, mask, stackWidth, 1, GDT_Float32, 0, 0);
+                    
+                    for(int k = 0; k < stackWidth; k++)
+                    {
+                        if(mask[k] == 0)
+                        {
+                            data[k] = maskValue;
+                        }
+                    }
+                    
+                    outputRasterBand->RasterIO(GF_Write, 0, m, stackWidth, 1, data, stackWidth, 1, GDT_Float32, 0, 0);
+                }
+                std::cout << " Complete.\n";
+            }
+            GDALClose(outputImageDS);
+        }
+        for(int i = 0; i < numImages; i++)
+        {
+            GDALClose(inDatasets[i]);
+        }
+        delete inDatasets;
+        delete data;
+        delete[] gdalTranslation;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::convertImageFileFormat(std::string inputImage, std::string outputImage, std::string outputImageFormat, bool projFromImage, std::string wktProjStr)
+{
+    GDALAllRegister();
+    GDALDataset *inDataset = NULL;
+    GDALDriver *gdalDriver = NULL;
+    GDALDataset *outDataset = NULL;
+    
+    GDALRasterBand *inputRasterBand = NULL;
+    GDALRasterBand *outputRasterBand = NULL;
+    
+    float *data = NULL;
+    
+    char **gdalDriverMetaInfo;
+    int numOutBands = 0;
+    int width = 0;
+    int height = 0;
+    
+    try
+    {
+        // Create new Image
+        gdalDriver = GetGDALDriverManager()->GetDriverByName(outputImageFormat.c_str());
+        if(gdalDriver == NULL)
+        {
+            std::string message = std::string("Driver for ") + outputImageFormat + std::string(" does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        
+        gdalDriverMetaInfo = gdalDriver->GetMetadata();
+        if(CSLFetchBoolean(gdalDriverMetaInfo, GDAL_DCAP_CREATECOPY, FALSE ))
+        {
+            std::cout << "Driver for " << outputImageFormat << " supports CreateCopy\n";
+        }
+        else
+        {
+            throw ImageException("Image driver does not support image copy. Therefore cannot create file of this type.");
+        }
+        
+        std::cout << "Openning image " << inputImage << std::endl;
+        inDataset = (GDALDataset *) GDALOpenShared(inputImage.c_str(), GA_ReadOnly);
+        if(inDataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + inputImage;
+            throw ImageException(message.c_str());
+        }
+        
+        std::cout << "Creating image " << outputImage << std::endl;
+        outDataset = gdalDriver->CreateCopy(outputImage.c_str(), inDataset, FALSE, NULL, NULL, NULL);
+        if(outDataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + outputImage;
+            throw ImageException(outputImage.c_str());
+        }
+        
+        if(!projFromImage)
+        {
+            outDataset->SetProjection(wktProjStr.c_str());
+        }
+        
+        width = inDataset->GetRasterXSize();
+        height = inDataset->GetRasterYSize();
+        data = (float *) CPLMalloc(sizeof(float)*width);
+        std::cout << "Image size [" << width << "," << height << "]\n";
+        
+        numOutBands = inDataset->GetRasterCount();
+        for(int n = 1; n <= numOutBands; n++)
+        {
+            std::cout << "Image Band " << n << " of " << numOutBands << std::endl;
+            inputRasterBand = inDataset->GetRasterBand(n);
+            outputRasterBand = outDataset->GetRasterBand(n);
+            
+            int feedback = height/10;
+            int feedbackCounter = 0;
+            std::cout << "Started" << std::flush;
+            
+            for(int m = 0; m < height; m++)
+            {
+                if((m % feedback) == 0)
+                {
+                    std::cout << ".." << feedbackCounter << ".." << std::flush;
+                    feedbackCounter = feedbackCounter + 10;
+                }
+                
+                inputRasterBand->RasterIO(GF_Read, 0, m, width, 1, data, width, 1, GDT_Float32, 0, 0);
+                outputRasterBand->RasterIO(GF_Write, 0, m, width, 1, data, width, 1, GDT_Float32, 0, 0);
+            }
+            std::cout << " Complete.\n";
+        }
+        
+        GDALClose(outDataset);
+        GDALClose(inDataset);
+        delete data;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+float** ImageUtils::getImageDataBlock(GDALDataset *dataset, int *dsOffsets, unsigned int width, unsigned int height, unsigned int *numVals)
+{
+    unsigned int numImageBands = dataset->GetRasterCount();
+    *numVals = width*height;
+    
+    GDALRasterBand **rasterBands = new GDALRasterBand*[numImageBands];
+    float **imgData = new float*[numImageBands];
+    float **outVals = new float*[numImageBands];
+    for(unsigned int i = 0; i < numImageBands; ++i)
+    {
+        outVals[i] = new float[*numVals];
+        rasterBands[i] = dataset->GetRasterBand(i+1);
+        imgData[i] = (float *) CPLMalloc(sizeof(float)*width);
+    }
+    
+    unsigned int outValCounter = 0;
+    for(unsigned int i = 0; i < height; ++i)
+    {
+        for(unsigned k = 0; k < numImageBands; ++k)
+        {
+            rasterBands[k]->RasterIO(GF_Read, dsOffsets[0], dsOffsets[1]+i, width, 1, imgData[k], width, 1, GDT_Float32, 0, 0);
+        }
+        
+        for(unsigned int j = 0; j < width; ++j)
+        {
+            for(unsigned k = 0; k < numImageBands; ++k)
+            {
+                outVals[k][outValCounter] = imgData[k][j];
+            }
+            ++outValCounter;
+        }
+    }
+    
+    for(unsigned int i = 0; i < numImageBands; ++i)
+    {
+        CPLFree(imgData[i]);
+    }
+    delete[] imgData;
+    delete[]rasterBands;
+            
+    return outVals;
+}
+
+std::vector<double>* ImageUtils::getImageBandValues(GDALDataset *dataset, unsigned int band, bool noDataValDefined, float noDataVal)
+{
+    std::vector<double> *imgVals = new std::vector<double>();
+    try
+    {
+        unsigned int width = dataset->GetRasterXSize();
+        unsigned int height = dataset->GetRasterYSize();
+        imgVals->reserve(width*height);
+        GDALRasterBand *gdalBand = dataset->GetRasterBand(band);
+        int blockSizeX = 0;
+        int blockSizeY = 0;
+        gdalBand->GetBlockSize(&blockSizeX, &blockSizeY);
+        unsigned int bufSize = width*blockSizeY;
+        float *imgData = new float[bufSize];
+        
+        int numBlocks = floor((float)height/(float)blockSizeY);
+        unsigned int numRowsRemaining = height - (numBlocks*blockSizeY);
+        
+        int yOff = 0;
+        for(unsigned int n = 0; n < numBlocks; ++n)
+        {
+            gdalBand->RasterIO(GF_Read, 0, yOff, width, blockSizeY, imgData, width, blockSizeY, GDT_Float32, 0, 0);
+            
+            for(unsigned int i = 0; i < bufSize; ++i)
+            {
+                if(noDataValDefined && (imgData[i] != noDataVal))
+                {
+                    imgVals->push_back(imgData[i]);
+                }
+            }
+            
+            yOff += blockSizeY;
+        }            
+        
+        if(numRowsRemaining > 0)
+        {
+            bufSize = width*numRowsRemaining;
+            
+            gdalBand->RasterIO(GF_Read, 0, yOff, width, numRowsRemaining, imgData, width, numRowsRemaining, GDT_Float32, 0, 0);
+            
+            for(unsigned int i = 0; i < bufSize; ++i)
+            {
+                if(noDataValDefined && (imgData[i] != noDataVal))
+                {
+                    imgVals->push_back(imgData[i]);
+                }
+            }
+        }
+        
+        delete[] imgData;
+    }
+    catch (ImageException *e)
+    {
+        throw e;
+    }
+    catch (rsgis::Exception &e)
+    {
+        throw rsgis::ImageException(e.what());
+    }
+    catch (std::exception &e)
+    {
+        throw rsgis::ImageException(e.what());
+    }
+    
+    return imgVals;
+}
+
+
+void ImageUtils::copyImageRemoveSpatialReference(std::string inputImage, std::string outputImage)
+{
+    GDALAllRegister();
+    GDALDataset *inDataset = NULL;
+    GDALDriver *gdalDriver = NULL;
+    GDALDataset *outDataset = NULL;
+    
+    GDALRasterBand *inputRasterBand = NULL;
+    GDALRasterBand *outputRasterBand = NULL;
+    
+    float *data = NULL;
+    
+    int numOutBands = 0;
+    int width = 0;
+    int height = 0;
+    double *transformation = NULL;
+    
+    try
+    {
+        // Create new Image
+        gdalDriver = GetGDALDriverManager()->GetDriverByName("ENVI");
+        if(gdalDriver == NULL)
+        {
+            std::string message = std::string("Driver for ENVI does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat("ENVI");
+        
+        std::cout << "Openning image " << inputImage << std::endl;
+        inDataset = (GDALDataset *) GDALOpenShared(inputImage.c_str(), GA_ReadOnly);
+        if(inDataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + inputImage;
+            throw ImageException(message.c_str());
+        }
+        
+        numOutBands = inDataset->GetRasterCount();
+        
+        width = inDataset->GetRasterXSize();
+        height = inDataset->GetRasterYSize();
+        
+            transformation = new double[6];
+        transformation[0] = 0;
+        transformation[1] = 1;
+        transformation[2] = 0;
+        transformation[3] = 0;
+        transformation[4] = 0;
+        transformation[5] = -1;
+        
+        std::cout << "Creating image " << outputImage << std::endl;
+        outDataset = gdalDriver->Create(outputImage.c_str(), width, height, numOutBands, GDT_Float32, papszOptions);
+        
+        if(outDataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + outputImage;
+            throw ImageException(outputImage.c_str());
+        }
+        
+        outDataset->SetGeoTransform(transformation);
+        outDataset->SetProjection("");
+        
+        
+        data = (float *) CPLMalloc(sizeof(float)*width);
+        std::cout << "Image size [" << width << "," << height << "]\n";
+        
+        
+        for(int n = 1; n <= numOutBands; n++)
+        {
+            std::cout << "Image Band " << n << " of " << numOutBands << std::endl;
+            inputRasterBand = inDataset->GetRasterBand(n);
+            outputRasterBand = outDataset->GetRasterBand(n);
+            
+            int feedback = height/10;
+            int feedbackCounter = 0;
+            std::cout << "Started" << std::flush;
+            
+            for(int m = 0; m < height; m++)
+            {
+                if((m % feedback) == 0)
+                {
+                    std::cout << ".." << feedbackCounter << ".." << std::flush;
+                    feedbackCounter = feedbackCounter + 10;
+                }
+                
+                inputRasterBand->RasterIO(GF_Read, 0, m, width, 1, data, width, 1, GDT_Float32, 0, 0);
+                outputRasterBand->RasterIO(GF_Write, 0, m, width, 1, data, width, 1, GDT_Float32, 0, 0);
+            }
+            std::cout << " Complete.\n";
+        }
+        
+        GDALClose(outDataset);
+        GDALClose(inDataset);
+        delete data;
+        delete transformation;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::copyImageDefiningSpatialReference(std::string inputImage, std::string outputImage, std::string proj, double tlX, double tlY, float xRes, float yRes)
+{
+    GDALAllRegister();
+    GDALDataset *inDataset = NULL;
+    GDALDriver *gdalDriver = NULL;
+    GDALDataset *outDataset = NULL;
+    
+    GDALRasterBand *inputRasterBand = NULL;
+    GDALRasterBand *outputRasterBand = NULL;
+    
+    float *data = NULL;
+    
+    int numOutBands = 0;
+    int width = 0;
+    int height = 0;
+    double *transformation = NULL;
+    
+    try
+    {
+        // Create new Image
+        gdalDriver = GetGDALDriverManager()->GetDriverByName("ENVI");
+        if(gdalDriver == NULL)
+        {
+            std::string message = std::string("Driver for ENVI does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat("ENVI");
+        
+        std::cout << "Openning image " << inputImage << std::endl;
+        inDataset = (GDALDataset *) GDALOpenShared(inputImage.c_str(), GA_ReadOnly);
+        if(inDataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + inputImage;
+            throw ImageException(message.c_str());
+        }
+        
+        numOutBands = inDataset->GetRasterCount();
+        
+        width = inDataset->GetRasterXSize();
+        height = inDataset->GetRasterYSize();
+        
+        transformation = new double[6];
+        transformation[0] = tlX;
+        transformation[1] = xRes;
+        transformation[2] = 0;
+        transformation[3] = tlY;
+        transformation[4] = 0;
+        transformation[5] = yRes;
+        
+        std::cout << "Creating image " << outputImage << std::endl;
+        outDataset = gdalDriver->Create(outputImage.c_str(), width, height, numOutBands, GDT_Float32, papszOptions);
+        if(outDataset == NULL)
+        {
+            std::string message = std::string("Could not open image ") + outputImage;
+            throw ImageException(outputImage.c_str());
+        }
+        
+        outDataset->SetGeoTransform(transformation);
+        std::cout << "Defining projections as :\'" << proj << "\'\n";
+        char **wktInSpatialRef = new char*[1];
+        wktInSpatialRef[0] = const_cast<char *>(proj.c_str());
+        OGRSpatialReference ogrSpatial = OGRSpatialReference();
+        ogrSpatial.importFromWkt(wktInSpatialRef);
+        
+        char **wktspatialref = new char*[1];
+        wktspatialref[0] = new char[10000];
+        ogrSpatial.exportToWkt(wktspatialref);			
+        
+        CPLErr errorCode = outDataset->SetProjection(wktspatialref[0]);
+        if(errorCode == CE_Failure)
+        {
+            throw ImageException("Projection could not be defined.");
+        }
+        
+        char **proj4spatialref = new char*[1];
+        proj4spatialref[0] = new char[1000];
+        ogrSpatial.exportToProj4(proj4spatialref);
+        std::cout << "As Proj4: \'" << proj4spatialref[0] << "\'" << std::endl;
+        
+        CPLFree(wktspatialref);
+        CPLFree(wktInSpatialRef);
+        CPLFree(proj4spatialref);
+        
+        data = (float *) CPLMalloc(sizeof(float)*width);
+        std::cout << "Image size [" << width << "," << height << "]\n";
+        
+        
+        for(int n = 1; n <= numOutBands; n++)
+        {
+            std::cout << "Image Band " << n << " of " << numOutBands << std::endl;
+            inputRasterBand = inDataset->GetRasterBand(n);
+            outputRasterBand = outDataset->GetRasterBand(n);
+            
+            int feedback = height/10;
+            int feedbackCounter = 0;
+            std::cout << "Started" << std::flush;
+            
+            for(int m = 0; m < height; m++)
+            {
+                if((m % feedback) == 0)
+                {
+                    std::cout << ".." << feedbackCounter << ".." << std::flush;
+                    feedbackCounter = feedbackCounter + 10;
+                }
+                
+                inputRasterBand->RasterIO(GF_Read, 0, m, width, 1, data, width, 1, GDT_Float32, 0, 0);
+                outputRasterBand->RasterIO(GF_Write, 0, m, width, 1, data, width, 1, GDT_Float32, 0, 0);
+            }
+            std::cout << " Complete.\n";
+        }
+        
+        GDALClose(outDataset);
+        GDALClose(inDataset);
+        delete data;
+        delete transformation;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::createImageSlices(GDALDataset *dataset, std::string outputImageBase)
+{
+    rsgis::math::MathsUtils mathUtils;
+    
+    GDALDriver *gdalDriver = NULL;
+    GDALDataset *outDataset = NULL;
+    GDALRasterBand *outputRasterBand = NULL;
+    GDALRasterBand **inputBands = NULL;
+    float *data = NULL;
+    
+    try
+    {
+        // Create new Image
+        gdalDriver = GetGDALDriverManager()->GetDriverByName("ENVI");
+        if(gdalDriver == NULL)
+        {
+            std::string message = std::string("Driver for ENVI does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat("ENVI");
+        
+        unsigned int width = dataset->GetRasterXSize();
+        unsigned int height = dataset->GetRasterCount();
+        
+        data = (float *) CPLMalloc(sizeof(float)*width);
+        
+        inputBands = new GDALRasterBand*[dataset->GetRasterCount()];
+        for(int n = 0; n < dataset->GetRasterCount(); ++n)
+        {
+            inputBands[n] = dataset->GetRasterBand(n+1);
+        }
+        
+        for(int i = 0; i < dataset->GetRasterYSize(); ++i)
+        {
+            std::string outputImage = outputImageBase + mathUtils.inttostring(i) + std::string(".env");
+            outDataset = gdalDriver->Create(outputImage.c_str(), width, height, 1, GDT_Float32, papszOptions);
+            if(outDataset == NULL)
+            {
+                std::string message = std::string("Could not open image ") + outputImage;
+                throw ImageException(outputImage.c_str());
+            }
+            outputRasterBand = outDataset->GetRasterBand(1);
+            
+            for(int j = 0; j < dataset->GetRasterCount(); ++j)
+            {
+                inputBands[j]->RasterIO(GF_Read, 0, i, width, 1, data, width, 1, GDT_Float32, 0, 0);
+                outputRasterBand->RasterIO(GF_Write, 0, ((dataset->GetRasterCount()-j)-1), width, 1, data, width, 1, GDT_Float32, 0, 0);
+            }
+            
+            GDALClose(outDataset);
+        }
+        
+        delete[] inputBands;
+        delete[] data;
+        
+    }
+    catch(ImageBandException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::copyFloatGDALDataset(GDALDataset *inData, GDALDataset *outData)
+{
+    try
+    {
+        // Change dimensions are the same.
+        if(inData->GetRasterXSize() != outData->GetRasterXSize())
+        {
+            throw ImageException("Widths are not the same");
+        }
+        if(inData->GetRasterYSize() != outData->GetRasterYSize())
+        {
+            throw ImageException("Heights are not the same");
+        }
+        if(inData->GetRasterCount() != outData->GetRasterCount())
+        {
+            throw ImageException("Number of bands are not the same");
+        }
+        
+        unsigned long width = inData->GetRasterXSize();
+        unsigned long height = inData->GetRasterYSize();
+        unsigned int numBands = inData->GetRasterCount();
+        
+        GDALRasterBand **inputRasterBands = new GDALRasterBand*[numBands];
+        GDALRasterBand **outputRasterBands = new GDALRasterBand*[numBands];
+        float *data = new float[width];
+        
+        for(unsigned int n = 0; n < numBands; ++n)
+        {
+            inputRasterBands[n] = inData->GetRasterBand(n+1);
+            outputRasterBands[n] = outData->GetRasterBand(n+1);
+        }
+        
+        for(unsigned long y = 0; y < height; ++y)
+        {
+            for(unsigned int n = 0; n < numBands; ++n)
+            {
+                inputRasterBands[n]->RasterIO(GF_Read, 0, y, width, 1, data, width, 1, GDT_Float32, 0, 0);
+                outputRasterBands[n]->RasterIO(GF_Write, 0, y, width, 1, data, width, 1, GDT_Float32, 0, 0);
+            }
+        }
+            
+        delete[] inputRasterBands;
+        delete[] outputRasterBands;
+        delete[] data;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::copyIntGDALDataset(GDALDataset *inData, GDALDataset *outData)
+{
+    try
+    {
+        // Change dimensions are the same.
+        if(inData->GetRasterXSize() != outData->GetRasterXSize())
+        {
+            throw ImageException("Widths are not the same");
+        }
+        if(inData->GetRasterYSize() != outData->GetRasterYSize())
+        {
+            throw ImageException("Heights are not the same");
+        }
+        if(inData->GetRasterCount() != outData->GetRasterCount())
+        {
+            throw ImageException("Number of bands are not the same");
+        }
+        
+        unsigned long width = inData->GetRasterXSize();
+        unsigned long height = inData->GetRasterYSize();
+        unsigned int numBands = inData->GetRasterCount();
+        
+        GDALRasterBand **inputRasterBands = new GDALRasterBand*[numBands];
+        GDALRasterBand **outputRasterBands = new GDALRasterBand*[numBands];
+        int *data = new int[width];
+        
+        for(unsigned int n = 0; n < numBands; ++n)
+        {
+            inputRasterBands[n] = inData->GetRasterBand(n+1);
+            outputRasterBands[n] = outData->GetRasterBand(n+1);
+        }
+        
+        for(unsigned long y = 0; y < height; ++y)
+        {
+            for(unsigned int n = 0; n < numBands; ++n)
+            {
+                inputRasterBands[n]->RasterIO(GF_Read, 0, y, width, 1, data, width, 1, GDT_Int32, 0, 0);
+                outputRasterBands[n]->RasterIO(GF_Write, 0, y, width, 1, data, width, 1, GDT_Int32, 0, 0);
+            }
+        }
+        
+        delete[] inputRasterBands;
+        delete[] outputRasterBands;
+        delete[] data;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::copyUIntGDALDataset(GDALDataset *inData, GDALDataset *outData)
+{
+    try
+    {
+        // Change dimensions are the same.
+        if(inData->GetRasterXSize() != outData->GetRasterXSize())
+        {
+            throw ImageException("Widths are not the same");
+        }
+        if(inData->GetRasterYSize() != outData->GetRasterYSize())
+        {
+            throw ImageException("Heights are not the same");
+        }
+        if(inData->GetRasterCount() != outData->GetRasterCount())
+        {
+            throw ImageException("Number of bands are not the same");
+        }
+        
+        unsigned long width = inData->GetRasterXSize();
+        unsigned long height = inData->GetRasterYSize();
+        unsigned int numBands = inData->GetRasterCount();
+        
+        GDALRasterBand **inputRasterBands = new GDALRasterBand*[numBands];
+        GDALRasterBand **outputRasterBands = new GDALRasterBand*[numBands];
+        unsigned int *data = new unsigned int[width];
+        
+        for(unsigned int n = 0; n < numBands; ++n)
+        {
+            inputRasterBands[n] = inData->GetRasterBand(n+1);
+            outputRasterBands[n] = outData->GetRasterBand(n+1);
+        }
+        
+        for(unsigned long y = 0; y < height; ++y)
+        {
+            for(unsigned int n = 0; n < numBands; ++n)
+            {
+                inputRasterBands[n]->RasterIO(GF_Read, 0, y, width, 1, data, width, 1, GDT_UInt32, 0, 0);
+                outputRasterBands[n]->RasterIO(GF_Write, 0, y, width, 1, data, width, 1, GDT_UInt32, 0, 0);
+            }
+        }
+        
+        delete[] inputRasterBands;
+        delete[] outputRasterBands;
+        delete[] data;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::copyFloat32GDALDataset(GDALDataset *inData, GDALDataset *outData)
+{
+    try
+    {
+        // Change dimensions are the same.
+        if(inData->GetRasterXSize() != outData->GetRasterXSize())
+        {
+            throw ImageException("Widths are not the same");
+        }
+        if(inData->GetRasterYSize() != outData->GetRasterYSize())
+        {
+            throw ImageException("Heights are not the same");
+        }
+        if(inData->GetRasterCount() != outData->GetRasterCount())
+        {
+            throw ImageException("Number of bands are not the same");
+        }
+        
+        unsigned long width = inData->GetRasterXSize();
+        unsigned long height = inData->GetRasterYSize();
+        unsigned int numBands = inData->GetRasterCount();
+        
+        GDALRasterBand **inputRasterBands = new GDALRasterBand*[numBands];
+        GDALRasterBand **outputRasterBands = new GDALRasterBand*[numBands];
+        float *data = new float[width];
+        
+        for(unsigned int n = 0; n < numBands; ++n)
+        {
+            inputRasterBands[n] = inData->GetRasterBand(n+1);
+            outputRasterBands[n] = outData->GetRasterBand(n+1);
+        }
+        
+        for(unsigned long y = 0; y < height; ++y)
+        {
+            for(unsigned int n = 0; n < numBands; ++n)
+            {
+                inputRasterBands[n]->RasterIO(GF_Read, 0, y, width, 1, data, width, 1, GDT_Float32, 0, 0);
+                outputRasterBands[n]->RasterIO(GF_Write, 0, y, width, 1, data, width, 1, GDT_Float32, 0, 0);
+            }
+        }
+        
+        delete[] inputRasterBands;
+        delete[] outputRasterBands;
+        delete[] data;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::copyByteGDALDataset(GDALDataset *inData, GDALDataset *outData)
+{
+    try
+    {
+        // Change dimensions are the same.
+        if(inData->GetRasterXSize() != outData->GetRasterXSize())
+        {
+            throw ImageException("Widths are not the same");
+        }
+        if(inData->GetRasterYSize() != outData->GetRasterYSize())
+        {
+            throw ImageException("Heights are not the same");
+        }
+        if(inData->GetRasterCount() != outData->GetRasterCount())
+        {
+            throw ImageException("Number of bands are not the same");
+        }
+        
+        unsigned long width = inData->GetRasterXSize();
+        unsigned long height = inData->GetRasterYSize();
+        unsigned int numBands = inData->GetRasterCount();
+        
+        GDALRasterBand **inputRasterBands = new GDALRasterBand*[numBands];
+        GDALRasterBand **outputRasterBands = new GDALRasterBand*[numBands];
+        int *data = new int[width];
+        
+        for(unsigned int n = 0; n < numBands; ++n)
+        {
+            inputRasterBands[n] = inData->GetRasterBand(n+1);
+            outputRasterBands[n] = outData->GetRasterBand(n+1);
+        }
+        
+        for(unsigned long y = 0; y < height; ++y)
+        {
+            for(unsigned int n = 0; n < numBands; ++n)
+            {
+                inputRasterBands[n]->RasterIO(GF_Read, 0, y, width, 1, data, width, 1, GDT_Byte, 0, 0);
+                outputRasterBands[n]->RasterIO(GF_Write, 0, y, width, 1, data, width, 1, GDT_Byte, 0, 0);
+            }
+        }
+        
+        delete[] inputRasterBands;
+        delete[] outputRasterBands;
+        delete[] data;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::zerosUIntGDALDataset(GDALDataset *data)
+{
+    try
+    {
+        unsigned long xSize = data->GetRasterXSize();
+        unsigned long ySize = data->GetRasterYSize();
+        unsigned int numBands = data->GetRasterCount();
+        int xBlockSize = 0;
+        int yBlockSize = 0;
+        
+        GDALRasterBand **rasterBands = new GDALRasterBand*[numBands];
+        for(int i = 0; i < numBands; i++)
+        {
+            rasterBands[i] = data->GetRasterBand(i+1);
+        }
+        rasterBands[0]->GetBlockSize(&xBlockSize, &yBlockSize);
+        
+        // Allocate memory
+        unsigned int *dataVals = new unsigned int[xSize*yBlockSize];
+        
+        for(unsigned int i = 0; i < (xSize*yBlockSize); ++i)
+        {
+            dataVals[i] = 0;
+        }
+        
+        int nYBlocks = ySize / yBlockSize;
+        int remainRows = ySize - (nYBlocks * yBlockSize);
+        int rowOffset = 0;
+        
+        rsgis_tqdm pbar;
+        // Loop images to process data
+        for(int i = 0; i < nYBlocks; i++)
+        {
+            pbar.progress(i, nYBlocks);
+            
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = yBlockSize * i;
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, yBlockSize, dataVals, xSize, yBlockSize, GDT_UInt32, 0, 0);
+            }
+        }
+        
+        if(remainRows > 0)
+        {
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = (yBlockSize * nYBlocks);
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, remainRows, dataVals, xSize, remainRows, GDT_UInt32, 0, 0);
+            }
+        }
+        pbar.finish();
+        
+        delete[] rasterBands;
+        delete[] dataVals;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::zerosFloatGDALDataset(GDALDataset *data)
+{
+    try
+    {
+        unsigned long xSize = data->GetRasterXSize();
+        unsigned long ySize = data->GetRasterYSize();
+        unsigned int numBands = data->GetRasterCount();
+        int xBlockSize = 0;
+        int yBlockSize = 0;
+        
+        GDALRasterBand **rasterBands = new GDALRasterBand*[numBands];
+        for(int i = 0; i < numBands; i++)
+        {
+            rasterBands[i] = data->GetRasterBand(i+1);
+        }
+        rasterBands[0]->GetBlockSize(&xBlockSize, &yBlockSize);
+        
+        // Allocate memory
+        float *dataVals = new float[xSize*yBlockSize];
+        
+        for(unsigned int i = 0; i < (xSize*yBlockSize); ++i)
+        {
+            dataVals[i] = 0;
+        }
+        
+        int nYBlocks = ySize / yBlockSize;
+        int remainRows = ySize - (nYBlocks * yBlockSize);
+        int rowOffset = 0;
+        
+        rsgis_tqdm pbar;
+        // Loop images to process data
+        for(int i = 0; i < nYBlocks; i++)
+        {
+            pbar.progress(i, nYBlocks);
+            
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = yBlockSize * i;
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, yBlockSize, dataVals, xSize, yBlockSize, GDT_Float32, 0, 0);
+            }
+        }
+        
+        if(remainRows > 0)
+        {
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = (yBlockSize * nYBlocks);
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, remainRows, dataVals, xSize, remainRows, GDT_Float32, 0, 0);
+            }
+        }
+        pbar.finish();
+        
+        delete[] rasterBands;
+        delete[] dataVals;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::zerosByteGDALDataset(GDALDataset *data)
+{
+    try
+    {
+        unsigned long xSize = data->GetRasterXSize();
+        unsigned long ySize = data->GetRasterYSize();
+        unsigned int numBands = data->GetRasterCount();
+        int xBlockSize = 0;
+        int yBlockSize = 0;
+        
+        GDALRasterBand **rasterBands = new GDALRasterBand*[numBands];
+        for(int i = 0; i < numBands; i++)
+        {
+            rasterBands[i] = data->GetRasterBand(i+1);
+        }
+        rasterBands[0]->GetBlockSize(&xBlockSize, &yBlockSize);
+        
+        // Allocate memory
+        int *dataVals = new int[xSize*yBlockSize];
+        
+        for(unsigned int i = 0; i < (xSize*yBlockSize); ++i)
+        {
+            dataVals[i] = 0;
+        }
+        
+        int nYBlocks = ySize / yBlockSize;
+        int remainRows = ySize - (nYBlocks * yBlockSize);
+        int rowOffset = 0;
+        
+        rsgis_tqdm pbar;
+        // Loop images to process data
+        for(int i = 0; i < nYBlocks; i++)
+        {
+            pbar.progress(i, nYBlocks);
+            
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = yBlockSize * i;
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, yBlockSize, dataVals, xSize, yBlockSize, GDT_Byte, 0, 0);
+            }
+        }
+        
+        if(remainRows > 0)
+        {
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = (yBlockSize * nYBlocks);
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, remainRows, dataVals, xSize, remainRows, GDT_Byte, 0, 0);
+            }
+        }
+        pbar.finish();
+        
+        delete[] rasterBands;
+        delete[] dataVals;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::defineImageEdge(GDALDataset *data, unsigned int nEdgePxls, unsigned int outEdgeVal, unsigned int outInnerVal)
+{
+    try
+    {
+        unsigned long xSize = data->GetRasterXSize();
+        unsigned long ySize = data->GetRasterYSize();
+        int xBlockSize = 0;
+        int yBlockSize = 0;
+
+        GDALRasterBand *rasterBand = data->GetRasterBand(1);
+        rasterBand->GetBlockSize(&xBlockSize, &yBlockSize);
+
+        // Define all the pixels to the inner value.
+        // Allocate memory
+        int *dataVals = new int[xSize*yBlockSize];
+
+        for(unsigned int i = 0; i < (xSize*yBlockSize); ++i)
+        {
+            dataVals[i] = outInnerVal;
+        }
+
+        int nYBlocks = ySize / yBlockSize;
+        int remainRows = ySize - (nYBlocks * yBlockSize);
+        int rowOffset = 0;
+
+        rsgis_tqdm pbar;
+        // Loop images to process data
+        for(int i = 0; i < nYBlocks; i++)
+        {
+            pbar.progress(i, nYBlocks);
+
+            rowOffset = yBlockSize * i;
+            rasterBand->RasterIO(GF_Write, 0, rowOffset, xSize, yBlockSize, dataVals, xSize, yBlockSize, GDT_UInt32, 0, 0);
+        }
+
+        if(remainRows > 0)
+        {
+            rowOffset = (yBlockSize * nYBlocks);
+            rasterBand->RasterIO(GF_Write, 0, rowOffset, xSize, remainRows, dataVals, xSize, remainRows, GDT_UInt32, 0, 0);
+        }
+        pbar.finish();
+        delete[] dataVals;
+
+        // Define the outer top and bottom edges:
+        // Allocate memory and define the
+        dataVals = new int[xSize*nEdgePxls];
+        for(unsigned int i = 0; i < (xSize*nEdgePxls); ++i)
+        {
+            dataVals[i] = outEdgeVal;
+        }
+        rasterBand->RasterIO(GF_Write, 0, 0, xSize, nEdgePxls, dataVals, xSize, nEdgePxls, GDT_UInt32, 0, 0);
+        rasterBand->RasterIO(GF_Write, 0, ySize-nEdgePxls, xSize, nEdgePxls, dataVals, xSize, nEdgePxls, GDT_UInt32, 0, 0);
+        delete[] dataVals;
+
+        // Define the outer top and bottom edges:
+        // Allocate memory and define the
+        dataVals = new int[nEdgePxls*ySize];
+        for(unsigned int i = 0; i < (nEdgePxls*ySize); ++i)
+        {
+            dataVals[i] = outEdgeVal;
+        }
+        rasterBand->RasterIO(GF_Write, 0, 0, nEdgePxls, ySize, dataVals, nEdgePxls, ySize, GDT_UInt32, 0, 0);
+        rasterBand->RasterIO(GF_Write, xSize-nEdgePxls, 0, nEdgePxls, ySize, dataVals, nEdgePxls, ySize, GDT_UInt32, 0, 0);
+        delete[] dataVals;
+
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+
+void ImageUtils::assignValGDALDataset(GDALDataset *data, float value)
+{
+    try
+    {
+        unsigned long xSize = data->GetRasterXSize();
+        unsigned long ySize = data->GetRasterYSize();
+        unsigned int numBands = data->GetRasterCount();
+        int xBlockSize = 0;
+        int yBlockSize = 0;
+        
+        GDALRasterBand **rasterBands = new GDALRasterBand*[numBands];
+        for(int i = 0; i < numBands; i++)
+        {
+            rasterBands[i] = data->GetRasterBand(i+1);
+        }
+        rasterBands[0]->GetBlockSize(&xBlockSize, &yBlockSize);
+        
+        // Allocate memory
+        float *dataVals = (float *) CPLMalloc(sizeof(float)*(xSize*yBlockSize));
+        
+        for(unsigned int i = 0; i < (xSize*yBlockSize); ++i)
+        {
+            dataVals[i] = value;
+        }
+        
+        int nYBlocks = ySize / yBlockSize;
+        int remainRows = ySize - (nYBlocks * yBlockSize);
+        int rowOffset = 0;
+        
+        rsgis_tqdm pbar;;
+        // Loop images to process data
+        for(int i = 0; i < nYBlocks; i++)
+        {
+            pbar.progress(i, nYBlocks);
+            
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = yBlockSize * i;
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, yBlockSize, dataVals, xSize, yBlockSize, GDT_Float32, 0, 0);
+            }
+        }
+        
+        if(remainRows > 0)
+        {
+            for(int n = 0; n < numBands; n++)
+            {
+                rowOffset = (yBlockSize * nYBlocks);
+                rasterBands[n]->RasterIO(GF_Write, 0, rowOffset, xSize, remainRows, dataVals, xSize, remainRows, GDT_Float32, 0, 0);
+            }
+        }
+        pbar.finish();
+        
+        delete[] rasterBands;
+        delete[] dataVals;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+GDALDataset* ImageUtils::createCopy(GDALDataset *inData, std::string outputFilePath, std::string outputFormat, GDALDataType eType, bool useImgProj, std::string proj)
+{
+    unsigned long width = inData->GetRasterXSize();
+    unsigned long height = inData->GetRasterYSize();
+    unsigned int numBands = inData->GetRasterCount();
+    
+    double *gdalTranslation = new double[6];
+    inData->GetGeoTransform(gdalTranslation);
+    
+    // Process dataset in memory
+    GDALDriver *gdalDriver = NULL;
+    gdalDriver = GetGDALDriverManager()->GetDriverByName(outputFormat.c_str());
+    if(gdalDriver == NULL)
+    {
+        delete[] gdalTranslation;
+        std::string message = std::string("Driver for ") + outputFormat + std::string(" does not exist\n");
+        throw ImageException(message.c_str());
+    }
+    char **papszOptions = this->getGDALCreationOptionsForFormat(outputFormat);
+    GDALDataset *dataset = gdalDriver->Create(outputFilePath.c_str(), width, height, numBands, eType, papszOptions);
+    if(dataset == NULL)
+    {
+        delete[] gdalTranslation;
+        std::string message = std::string("Could not create GDALDataset.");
+        throw ImageException(message);
+    }
+    
+    dataset->SetGeoTransform(gdalTranslation);
+    if(useImgProj)
+    {
+        dataset->SetProjection(inData->GetProjectionRef());
+    }
+    else
+    {
+        dataset->SetProjection(proj.c_str());
+    }
+    
+    delete[] gdalTranslation;
+    
+    return dataset;
+
+}
+
+GDALDataset* ImageUtils::createCopy(GDALDataset *inData, unsigned int numBands, std::string outputFilePath, std::string outputFormat, GDALDataType eType, bool useImgProj, std::string proj)
+{
+    unsigned long width = inData->GetRasterXSize();
+    unsigned long height = inData->GetRasterYSize();
+    
+    double *gdalTranslation = new double[6];
+    inData->GetGeoTransform(gdalTranslation);
+    
+    GDALDriver *gdalDriver = GetGDALDriverManager()->GetDriverByName(outputFormat.c_str());
+    if(gdalDriver == NULL)
+    {
+        delete[] gdalTranslation;
+        std::string message = std::string("Driver for ") + outputFormat + std::string(" does not exist\n");
+        throw ImageException(message.c_str());
+    }
+    char **papszOptions = this->getGDALCreationOptionsForFormat(outputFormat);
+    GDALDataset *dataset = gdalDriver->Create(outputFilePath.c_str(), width, height, numBands, eType, papszOptions);
+    if(dataset == NULL)
+    {
+        delete[] gdalTranslation;
+        std::string message = std::string("Could not create GDALDataset.");
+        throw ImageException(message);
+    }
+    
+    dataset->SetGeoTransform(gdalTranslation);
+    if(useImgProj)
+    {
+        dataset->SetProjection(inData->GetProjectionRef());
+    }
+    else
+    {
+        dataset->SetProjection(proj.c_str());
+    }
+    delete[] gdalTranslation;
+    
+    return dataset;
+    
+}
+
+GDALDataset* ImageUtils::createCopy(GDALDataset *inData, unsigned int numBands, std::string outputFilePath, std::string outputFormat, GDALDataType eType, OGREnvelope extent, bool useImgProj, std::string proj)
+{
+    GDALDataset *dataset = NULL;
+    try
+    {
+        double outImgMinX = 0.0;
+        double outImgMaxY = 0.0;
+        unsigned long outImgWidth = 0;
+        unsigned long outImgHeight = 0;
+        
+        unsigned long width = inData->GetRasterXSize();
+        unsigned long height = inData->GetRasterYSize();
+        
+        double *gdalTranslation = new double[6];
+        inData->GetGeoTransform(gdalTranslation);
+        
+        double xPxlSize = gdalTranslation[1];
+        double yPxlSize = gdalTranslation[5] * (-1);
+        
+        double imgMinX = gdalTranslation[0];
+        double imgMaxX = imgMinX + (gdalTranslation[1] * width);
+        double imgMaxY = gdalTranslation[3];
+        double imgMinY = imgMaxY + (gdalTranslation[5] * height);
+        
+        // Check extent is within image.
+        if( (extent.MinX >= imgMinX) & (extent.MaxX <= imgMaxX) & (extent.MinY >= imgMinY) & (extent.MaxY <= imgMinY) )
+        {
+            delete[] gdalTranslation;
+            throw ImageException("Extent needs to be within the image extent.");
+        }
+        
+        // Find Min X
+        double xMinDiff = extent.MinX - imgMinX;
+        unsigned int numPxls2ExtXMin = floor(xMinDiff/xPxlSize);
+        outImgMinX = imgMinX + (numPxls2ExtXMin * xPxlSize);
+        
+        // Find Max Y
+        double yMaxDiff = imgMaxY - extent.MaxY;
+        unsigned int numPxls2ExtYMax = floor(yMaxDiff/yPxlSize);
+        outImgMaxY = imgMaxY - (numPxls2ExtYMax * yPxlSize);
+        
+        // Find Max X and width
+        double xMaxDiff = extent.MaxX - outImgMinX;
+        outImgWidth = ceil(xMaxDiff/xPxlSize);
+        
+        // Find Min Y and height
+        double yMinDiff = outImgMaxY - extent.MinY;
+        outImgHeight = ceil(yMinDiff/yPxlSize);
+        
+        gdalTranslation[0] = outImgMinX;
+        gdalTranslation[3] = outImgMaxY;
+        
+        GDALDriver *gdalDriver = GetGDALDriverManager()->GetDriverByName(outputFormat.c_str());
+        if(gdalDriver == NULL)
+        {
+            delete[] gdalTranslation;
+            std::string message = std::string("Driver for ") + outputFormat + std::string(" does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat(outputFormat);
+        
+        dataset = gdalDriver->Create(outputFilePath.c_str(), outImgWidth, outImgHeight, numBands, eType, papszOptions);
+        if(dataset == NULL)
+        {
+            delete[] gdalTranslation;
+            std::string message = std::string("Could not create GDALDataset.");
+            throw ImageException(message);
+        }
+        
+        dataset->SetGeoTransform(gdalTranslation);
+        if(useImgProj)
+        {
+            dataset->SetProjection(inData->GetProjectionRef());
+        }
+        else
+        {
+            dataset->SetProjection(proj.c_str());
+        }
+        delete[] gdalTranslation;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+    return dataset;
+}
+
+
+GDALDataset* ImageUtils::createCopy(GDALDataset *inData, unsigned int numBands, std::string outputFilePath, std::string outputFormat, GDALDataType eType, double xMin, double xMax, double yMin, double yMax, double xRes, double yRes, bool useImgProj, std::string proj)
+{
+    GDALDataset *dataset = NULL;
+    try
+    {
+        if(yRes > 0)
+        {
+            yRes = yRes * (-1);
+        }
+        
+        // Find width
+        double xDiff = xMax - xMin;
+        unsigned long outImgWidth = abs(ceil(xDiff/xRes));
+                    
+        // Find height
+        double yDiff = yMax - yMin;
+        unsigned long outImgHeight = abs(ceil(yDiff/yRes));
+        
+        double *gdalTranslation = new double[6];
+        inData->GetGeoTransform(gdalTranslation);
+        
+        // Define the TL
+        gdalTranslation[0] = xMin;
+        gdalTranslation[3] = yMax;
+        
+        // Define the pixel size:
+        gdalTranslation[1] = xRes;
+        gdalTranslation[5] = yRes;
+        
+        GDALDriver *gdalDriver = GetGDALDriverManager()->GetDriverByName(outputFormat.c_str());
+        if(gdalDriver == NULL)
+        {
+            delete[] gdalTranslation;
+            std::string message = std::string("Driver for ") + outputFormat + std::string(" does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat(outputFormat);
+
+        dataset = gdalDriver->Create(outputFilePath.c_str(), outImgWidth, outImgHeight, numBands, eType, papszOptions);
+        if(dataset == NULL)
+        {
+            delete[] gdalTranslation;
+            std::string message = std::string("Could not create GDALDataset.");
+            throw ImageException(message);
+        }
+        
+        dataset->SetGeoTransform(gdalTranslation);
+        if(useImgProj)
+        {
+            dataset->SetProjection(inData->GetProjectionRef());
+        }
+        else
+        {
+            dataset->SetProjection(proj.c_str());
+        }
+        delete[] gdalTranslation;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+    return dataset;
+}
+
+
+GDALDataset* ImageUtils::createCopy(GDALDataset **datasets, int numDS, unsigned int numBands, std::string outputFilePath, std::string outputFormat, GDALDataType eType, bool useImgProj, std::string proj)
+{
+    GDALDataset *dataset = NULL;
+    try
+    {
+        int **dsOffsets = new int*[numDS];
+        for(int i = 0; i < numDS; i++)
+        {
+            dsOffsets[i] = new int[2];
+        }
+        int width = 0;
+        int height = 0;
+        double *gdalTranslation = new double[6];
+        this->getImageOverlap(datasets, numDS, dsOffsets, &width, &height, gdalTranslation);
+        for(int i = 0; i < numDS; ++i)
+        {
+            delete[] dsOffsets[i];
+        }
+        delete[] dsOffsets;
+        
+        GDALDriver *gdalDriver = NULL;
+        gdalDriver = GetGDALDriverManager()->GetDriverByName(outputFormat.c_str());
+        if(gdalDriver == NULL)
+        {
+            delete[] gdalTranslation;
+            std::string message = std::string("Driver for ") + outputFormat + std::string(" does not exist\n");
+            throw ImageException(message.c_str());
+        }
+        char **papszOptions = this->getGDALCreationOptionsForFormat(outputFormat);
+        
+        dataset = gdalDriver->Create(outputFilePath.c_str(), width, height, numBands, eType, papszOptions);
+        if(dataset == NULL)
+        {
+            delete[] gdalTranslation;
+            std::string message = std::string("Could not create GDALDataset.");
+            throw ImageException(message);
+        }
+        
+        dataset->SetGeoTransform(gdalTranslation);
+        if(useImgProj)
+        {
+            dataset->SetProjection(datasets[0]->GetProjectionRef());
+        }
+        else
+        {
+            dataset->SetProjection(proj.c_str());
+        }
+        delete[] gdalTranslation;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+    catch(Exception &e)
+    {
+        throw ImageException(e.what());
+    }
+    catch(std::exception &e)
+    {
+        throw ImageException(e.what());
+    }
+    
+    return dataset;
+}
+
+void ImageUtils::createKMLText(std::string inputImage, std::string outKMLFile) 
+{
+    
+    // Open text file for writing
+    std::ofstream outKML;
+    outKML.open(outKMLFile.c_str());
+    
+    GDALAllRegister();
+    GDALDataset *dataset = NULL;
+    dataset = (GDALDataset *) GDALOpen(inputImage.c_str(), GA_ReadOnly);
+    
+    if(dataset == NULL)
+    {
+        std::string message = std::string("Could not open image ") + inputImage;
+        throw ImageException(message.c_str());
+    }
+    
+    double *transformations = new double[6];
+    dataset->GetGeoTransform(transformations);
+    double xSize = dataset->GetRasterXSize();
+    double ySize = dataset->GetRasterYSize();
+    double pixelXRes = transformations[1];
+    double pixelYRes = transformations[5];
+    
+    double minX = transformations[0];
+    double maxY = transformations[3];
+    
+    double maxX = minX + (xSize * pixelXRes);
+    double minY = maxY - (ySize * fabs(pixelYRes));
+    
+    // Write out information 
+    outKML << "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n";
+    outKML << "	<kml xmlns=\"http://earth.google.com/kml/2.1\">\n";
+    outKML << "	  <Document>\n";
+    outKML << "	    <Name>" << inputImage << "</Name>\n";
+    outKML << "	    <Description></Description>\n";
+    outKML << "	    <Style>\n";
+    outKML << "	      <ListStyle id=\"hideChildren\">\n";
+    outKML << "	        <listItemType>checkHideChildren</listItemType>\n";
+    outKML << "	      </ListStyle>\n";
+    outKML << "	    </Style>\n";
+    outKML << "	    <GroundOverlay>\n";
+    outKML << "	      <Icon>\n";
+    outKML << "	        <href>" << inputImage << "</href>\n";
+    outKML << "	      </Icon>\n";
+    outKML << "	      <LatLonBox>\n";
+    outKML << "	        <north>" <<  maxY << "</north>\n";
+    outKML << "	        <south>" << minY << "</south>\n";
+    outKML << "	        <east>" << minX << "</east>\n";
+    outKML << "	        <west>" << maxX << "</west>\n";
+    outKML << "	      </LatLonBox>\n";
+    outKML << "	    </GroundOverlay>\n";
+    outKML << "	    </Document>\n";
+    outKML << "	</kml>\n";
+    
+    delete[] transformations;
+    
+    
+    GDALClose(dataset);
+    
+    
+}
+
+bool ImageUtils::closeResTest(double baseRes, double targetRes)
+{
+    /** Calculates if two doubles are close to each other with the threshold
+     * defined in the class.
+     * - A two sided test is used rather than the absolute value to prevent
+     * 	 overflows.
+     */
+    
+    if((baseRes < 0) & (targetRes > 0))
+    {
+        return false;
+    }
+    if((baseRes > 0) & (targetRes < 0))
+    {
+        return false;
+    }
+
+    bool closeRes = true;
+    double resDiff = baseRes - targetRes;
+    double resDiffVal = this->resDiffThresh * baseRes;
+
+    if(resDiff < 0)
+    {
+        resDiff = resDiff * (-1.0);
+    }
+    if(resDiffVal < 0)
+    {
+        resDiffVal = resDiffVal * (-1.0);
+    }
+    
+    if((resDiff > 0) && (resDiff > resDiffVal))
+    {
+        closeRes = false;
+    }
+    return closeRes;
+}
+
+double ImageUtils::getPixelValue(GDALDataset *image, unsigned int imgBand, double xLoc, double yLoc)
+{
+    double outVal = 0.0;
+    try
+    {
+        unsigned int numImgBands = image->GetRasterCount();
+        
+        if(imgBand > numImgBands)
+        {
+            throw ImageException("The band specified is not within the image.");
+        }
+        
+        GDALRasterBand *gdalBand = image->GetRasterBand(imgBand);
+        
+        double geoTransform[6];
+        
+        double xMin = 0.0;
+        double yMax = 0.0;
+        
+        double xMax = 0.0;
+        double yMin = 0.0;
+        
+        double imgRes = 0.0;
+        
+        double *pxlValue = (double *) CPLMalloc(sizeof(double));
+        
+        if( image->GetGeoTransform( geoTransform ) == CE_None )
+        {
+            xMin = geoTransform[0];
+            yMax = geoTransform[3];
+            
+            xMax = geoTransform[0] + (image->GetRasterXSize() * geoTransform[1]);
+            yMin = geoTransform[3] + (image->GetRasterYSize() * geoTransform[5]);
+            
+            imgRes = geoTransform[1];
+        }
+        else
+        {
+            throw ImageException("Could not read Geo Transform.");
+        }
+        
+        if((xLoc >= xMin) &&
+            (xLoc <= xMax) &&
+            (yLoc >= yMin) &&
+            (yLoc <= yMax))
+        {
+            double xDiff = xLoc - xMin;
+            double yDiff = yMax - yLoc;
+            
+            int xPxl = static_cast<int> (xDiff/imgRes);
+            int yPxl = static_cast<int> (yDiff/imgRes);
+            
+            gdalBand->RasterIO(GF_Read, xPxl, yPxl, 1, 1, pxlValue, 1, 1, GDT_Float64, 0, 0);
+            outVal = pxlValue[0];
+        }
+        else
+        {
+            throw ImageException("Point not within image file provided\n");
+        }
+        delete pxlValue;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+    catch(std::exception &e)
+    {
+        throw ImageException(e.what());
+    }
+    
+    return outVal;
+}
+
+double ImageUtils::getPixelValue(GDALDataset *image, unsigned int imgBand, unsigned int xPxl, unsigned int yPxl)
+{
+    double outVal = 0.0;
+    try
+    {
+        unsigned int numImgBands = image->GetRasterCount();
+        
+        if(imgBand > numImgBands)
+        {
+            throw ImageException("The band specified is not within the image.");
+        }
+        
+        if((xPxl < image->GetRasterXSize()) && (yPxl < image->GetRasterYSize()))
+        {
+            GDALRasterBand *gdalBand = image->GetRasterBand(imgBand);
+            double *pxlValue = (double *) CPLMalloc(sizeof(double));
+            gdalBand->RasterIO(GF_Read, xPxl, yPxl, 1, 1, pxlValue, 1, 1, GDT_Float64, 0, 0);
+            outVal = pxlValue[0];
+            delete pxlValue;
+        }
+        else
+        {
+            throw ImageException("Point not within image file provided\n");
+        }
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+    catch(std::exception &e)
+    {
+        throw ImageException(e.what());
+    }
+    
+    return outVal;
+}
+
+void ImageUtils::setPixelValue(GDALDataset *image, unsigned int imgBand, unsigned int xPxl, unsigned int yPxl, double val)
+{
+    try
+    {
+        unsigned int numImgBands = image->GetRasterCount();
+        
+        if(imgBand > numImgBands)
+        {
+            throw ImageException("The band specified is not within the image.");
+        }
+        
+        if((xPxl < image->GetRasterXSize()) && (yPxl < image->GetRasterYSize()))
+        {
+            GDALRasterBand *gdalBand = image->GetRasterBand(imgBand);
+            gdalBand->RasterIO(GF_Write, xPxl, yPxl, 1, 1, &val, 1, 1, GDT_Float64, 0, 0);
+        }
+        else
+        {
+            throw ImageException("Point not within image file provided\n");
+        }
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+    catch(std::exception &e)
+    {
+        throw ImageException(e.what());
+    }
+}
+
+void ImageUtils::createImageGrid(GDALDataset *inData, unsigned int numXPxls, unsigned int numYPxls, bool offset)
+{
+    try
+    {
+        unsigned long width = inData->GetRasterXSize();
+        unsigned long height = inData->GetRasterYSize();
+        unsigned int numBands = inData->GetRasterCount();
+        if(numBands != 1)
+        {
+            throw ImageException("Data must only have 1 image band.");
+        }
+        
+        GDALRasterBand *rasterBand = inData->GetRasterBand(1);
+        unsigned int *dataVals = new unsigned int[width];
+        
+        for(unsigned int i = 0; i < width; ++i)
+        {
+            dataVals[i] = 0;
+        }
+        
+        if(!offset)
+        {
+            unsigned int rowStartVal = 1;
+            unsigned int curPxlVal = 1;
+            
+            for(unsigned long y = 0; y < height; ++y)
+            {
+                if((y % numYPxls) == 0)
+                {
+                    rowStartVal = curPxlVal + 1;
+                }
+                
+                curPxlVal = rowStartVal;
+                
+                for(unsigned long x = 0; x < width; ++x)
+                {
+                    if((x % numXPxls) == 0)
+                    {
+                        ++curPxlVal;
+                    }
+                    dataVals[x] = curPxlVal;
+                }
+                
+                rasterBand->RasterIO(GF_Write, 0, y, width, 1, dataVals, width, 1, GDT_Int32, 0, 0);
+            }
+        }
+        else
+        {
+            throw ImageException("ImageUtils::createImageGrid with offset not implemented.");
+        }
+        
+        delete[] dataVals;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+void ImageUtils::populateImagePixelsInRange(GDALDataset *image, int minVal, int maxVal, bool singleLine)
+{
+    try
+    {
+        if(minVal >= maxVal)
+        {
+            throw ImageException("Min value must be smaller than Max value.");
+        }
+        
+        unsigned long width = image->GetRasterXSize();
+        unsigned long height = image->GetRasterYSize();
+        unsigned int numBands = image->GetRasterCount();
+        if(numBands != 1)
+        {
+            throw ImageException("Data must only have 1 image band.");
+        }
+        
+        GDALRasterBand *rasterBand = image->GetRasterBand(1);
+        unsigned int *dataVals = new unsigned int[width];
+        
+        for(unsigned int i = 0; i < width; ++i)
+        {
+            dataVals[i] = 0;
+        }
+        
+        int range = maxVal - minVal;
+        int curPxlVal = minVal;
+        int rangeLineCount = 0;
+        
+        for(unsigned long y = 0; y < height; ++y)
+        {
+            if(!singleLine)
+            {
+                curPxlVal = minVal + rangeLineCount;
+            }
+            
+            for(unsigned long x = 0; x < width; ++x)
+            {
+                if(curPxlVal > maxVal)
+                {
+                    curPxlVal = minVal;
+                }
+                dataVals[x] = curPxlVal;
+                ++curPxlVal;
+            }
+            
+            rasterBand->RasterIO(GF_Write, 0, y, width, 1, dataVals, width, 1, GDT_Int32, 0, 0);
+            ++rangeLineCount;
+            if(rangeLineCount > range)
+            {
+                rangeLineCount = 0;
+            }
+        }
+        
+        delete[] dataVals;
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+
+void ImageUtils::setImageBandNames(GDALDataset *dataset, std::vector<std::string> bandNames, bool quiet)
+{
+    try
+    {
+        unsigned int numBands = dataset->GetRasterCount();
+        if(numBands != bandNames.size())
+        {
+            throw ImageException("List of names must be the same length as the number of image bands.");
+        }
+
+        unsigned int bandN = 0;
+        for(unsigned int n = 0; n < numBands; ++n)
+        {
+            bandN = n + 1;
+            if(!quiet)
+            {
+                std::cout << "Setting band " << bandN << " name as \'" << bandNames.at(n) << "\'\n";
+            }
+            dataset->GetRasterBand(bandN)->SetDescription(bandNames.at(n).c_str());
+        }
+    }
+    catch(ImageException &e)
+    {
+        throw e;
+    }
+}
+
+std::map<std::string, std::string> ImageUtils::getCreateGDALImgEnvVars(std::string gdalFormat)
+{
+    std::map<std::string, std::string> gdal_creation_opts;
+    std::string var_name = "LIB_IMG_CRT_OPTS_" + boost::to_upper_copy(gdalFormat);
+    if(const char* env_p = std::getenv(var_name.c_str()))
+    {
+        std::string in_env_var = std::string(env_p);
+        std::vector<std::string> *img_vars = new std::vector<std::string>();
+        std::vector<std::string> *tmp_var = new std::vector<std::string>();
+        rsgis::utils::TextUtils textUtils;
+        textUtils.tokenizeString(in_env_var, ':', img_vars);
+        for(std::vector<std::string>::iterator iterImgVars = img_vars->begin(); iterImgVars != img_vars->end(); ++iterImgVars )
+        {
+            tmp_var->clear();
+            textUtils.tokenizeString((*iterImgVars), '=', tmp_var);
+            if(tmp_var->size() != 2)
+            {
+                std::string mess = std::string("Could not parse GDAL Image Creation Options (Variable: '") + var_name + std::string("'. Error: Should have two components split with '='. Recieved: '") + (*iterImgVars) + std::string("'");
+                delete img_vars;
+                delete tmp_var;
+                throw rsgis::ImageException(mess);
+            }
+            if(gdal_creation_opts.insert(std::make_pair(tmp_var->at(0), tmp_var->at(1))).second == false)
+            {
+                std::string mess = std::string("Key was duplicated, check your input for '") + var_name + std::string("'. Duplicated Key: '") + (*iterImgVars)  + std::string("'");
+                delete img_vars;
+                delete tmp_var;
+                throw rsgis::ImageException(mess);
+            }
+        }
+        
+        delete img_vars;
+        delete tmp_var;
+    }
+    return gdal_creation_opts;
+}
+
+char** ImageUtils::getGDALCreationOptions(std::map<std::string, std::string> gdal_creation_options)
+{
+    char **papszOptions=NULL;
+    for(std::map<std::string, std::string>::iterator iterOpts = gdal_creation_options.begin(); iterOpts != gdal_creation_options.end(); ++iterOpts)
+    {
+        papszOptions = CSLSetNameValue(papszOptions, (iterOpts->first).c_str(), (iterOpts->second).c_str());
+    }
+    return papszOptions;
+}
+
+char** ImageUtils::getGDALCreationOptionsForFormat(std::string gdalFormat)
+{
+    std::map<std::string, std::string> gdal_creation_options = this->getCreateGDALImgEnvVars(gdalFormat);
+    char **papszOptions = this->getGDALCreationOptions(gdal_creation_options);
+    return papszOptions;
+}
+
+ImageUtils::~ImageUtils()
+{
+    
+}
