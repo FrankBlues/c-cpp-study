@@ -1,0 +1,7 @@
+add_library(${IMG_LIB_NAME} SHARED ImageUtils.cpp ImageUtils.h CalcImageValue.cpp CalcImageValue.h)
+target_link_libraries(${IMG_LIB_NAME} ${COMMON_LIB_NAME} ${EXCEPTIONS_LIB_NAME} 
+  ${MATHS_LIB_NAME} ${UTILS_LIB_NAME} ${GDAL_LIBRARIES} ${BOOST_LIBRARIES})
+
+# target_include_directories(${IMG_LIB_NAME}
+#   INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
+#   )

@@ -4190,13 +4190,13 @@ std::vector<double>* ImageUtils::getImageBandValues(GDALDataset *dataset, unsign
     {
         throw e;
     }
-    catch (rsgis::Exception &e)
+    catch (BasicException &e)
     {
-        throw rsgis::ImageException(e.what());
+        throw ImageException(e.what());
     }
     catch (std::exception &e)
     {
-        throw rsgis::ImageException(e.what());
+        throw ImageException(e.what());
     }
     
     return imgVals;
@@ -4428,7 +4428,7 @@ void ImageUtils::copyImageDefiningSpatialReference(std::string inputImage, std::
 
 void ImageUtils::createImageSlices(GDALDataset *dataset, std::string outputImageBase)
 {
-    rsgis::math::MathsUtils mathUtils;
+    MathsUtils mathUtils;
     
     GDALDriver *gdalDriver = NULL;
     GDALDataset *outDataset = NULL;
@@ -5348,7 +5348,7 @@ GDALDataset* ImageUtils::createCopy(GDALDataset **datasets, int numDS, unsigned 
     {
         throw e;
     }
-    catch(Exception &e)
+    catch(BasicException &e)
     {
         throw ImageException(e.what());
     }
@@ -5759,7 +5759,7 @@ std::map<std::string, std::string> ImageUtils::getCreateGDALImgEnvVars(std::stri
         std::string in_env_var = std::string(env_p);
         std::vector<std::string> *img_vars = new std::vector<std::string>();
         std::vector<std::string> *tmp_var = new std::vector<std::string>();
-        rsgis::utils::TextUtils textUtils;
+        TextUtils textUtils;
         textUtils.tokenizeString(in_env_var, ':', img_vars);
         for(std::vector<std::string>::iterator iterImgVars = img_vars->begin(); iterImgVars != img_vars->end(); ++iterImgVars )
         {
@@ -5770,14 +5770,14 @@ std::map<std::string, std::string> ImageUtils::getCreateGDALImgEnvVars(std::stri
                 std::string mess = std::string("Could not parse GDAL Image Creation Options (Variable: '") + var_name + std::string("'. Error: Should have two components split with '='. Recieved: '") + (*iterImgVars) + std::string("'");
                 delete img_vars;
                 delete tmp_var;
-                throw rsgis::ImageException(mess);
+                throw ImageException(mess);
             }
             if(gdal_creation_opts.insert(std::make_pair(tmp_var->at(0), tmp_var->at(1))).second == false)
             {
                 std::string mess = std::string("Key was duplicated, check your input for '") + var_name + std::string("'. Duplicated Key: '") + (*iterImgVars)  + std::string("'");
                 delete img_vars;
                 delete tmp_var;
-                throw rsgis::ImageException(mess);
+                throw ImageException(mess);
             }
         }
         

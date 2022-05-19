@@ -39,8 +39,8 @@
 
 #include "math/MathsUtils.h"
 
-#include "ImageException.h"
-#include "common/OutputStreamException.h"
+#include "exception/ImageException.h"
+#include "exception/OutputStreamException.h"
 
 #include "utils/TextUtils.h"
 

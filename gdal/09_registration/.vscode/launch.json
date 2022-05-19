@@ -7,7 +7,7 @@
         "name": "(gdb) 启动",
         "type": "cppdbg",
         "request": "launch",
-        "program": "${workspaceFolder}/build/ImageRegistration",
+        "program": "${workspaceFolder}/build/BasicRegistrationTest",
         "args": [],
         "stopAtEntry": false,
         "cwd": "${fileDirname}",

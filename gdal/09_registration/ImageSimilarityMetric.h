@@ -28,7 +28,7 @@
 #include <cmath>
 
 #include "exception/MathException.h"
-#include "CalcImageValue.h"
+#include "img/CalcImageValue.h"
 
 // mark all exported classes/functions with DllExport to have
 // them exported by Visual Studio

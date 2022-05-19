@@ -1,0 +1,4 @@
+add_library(${COMMON_LIB_NAME} SHARED rsgis-tqdm.cpp rsgis-tqdm.h)
+# target_include_directories(${COMMON_LIB_NAME}
+#           INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}
+#           )

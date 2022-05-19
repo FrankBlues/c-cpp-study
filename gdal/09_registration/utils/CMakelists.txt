@@ -1,0 +1,6 @@
+add_library(${UTILS_LIB_NAME} SHARED TextUtils.cpp TextUtils.h)
+target_link_libraries(${UTILS_LIB_NAME} ${EXCEPTIONS_LIB_NAME} ${BOOST_LIBRARIES})
+# target_include_directories(${UTILS_LIB_NAME} PUBLIC
+#                            ${CMAKE_CURRENT_SOURCE_DIR}
+#                            "exception"
+# )

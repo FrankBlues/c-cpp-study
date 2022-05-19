@@ -65,24 +65,24 @@ int main()
                                                                             windowSize, searchArea, similarityMetric, stdDevRefThreshold,
                                                                             stdDevFloatThreshold, subPixelResolution);
     
-    // regImgs->runCompleteRegistration();
+    regImgs->runCompleteRegistration();
     
-    // if(outputType == 1) // envi_img2img
-    // {
-    //     regImgs->exportTiePointsENVIImage2Image(outputGCPFile);
-    // }
-    // else if(outputType == 2) // envi_img2map
-    // {
-    //     regImgs->exportTiePointsENVIImage2Map(outputGCPFile);
-    // }
-    // else if(outputType == 3) // rsgis_img2map
-    // {
-    //     regImgs->exportTiePointsRSGISImage2Map(outputGCPFile);
-    // }
-    // else if(outputType == 4) // rsgis_mapoffs
-    // {
-    //     regImgs->exportTiePointsRSGISMapOffs(outputGCPFile);
-    // }
+    if(outputType == 1) // envi_img2img
+    {
+        regImgs->exportTiePointsENVIImage2Image(outputGCPFile);
+    }
+    else if(outputType == 2) // envi_img2map
+    {
+        regImgs->exportTiePointsENVIImage2Map(outputGCPFile);
+    }
+    else if(outputType == 3) // rsgis_img2map
+    {
+        regImgs->exportTiePointsImage2Map(outputGCPFile);
+    }
+    else if(outputType == 4) // rsgis_mapoffs
+    {
+        regImgs->exportTiePointsMapOffs(outputGCPFile);
+    }
     
     delete similarityMetric;
     // delete regImgs;

@@ -85,7 +85,7 @@ void ImageRegistration::findOverlap()
 		delete[] dsOffsets;
 		delete[] imgs;
 	}
-	catch (rsgis::img::ImageBandException &e) 
+	catch (ImageBandException &e) 
 	{
 		throw RegistrationException(e.what());
 	}
@@ -119,7 +119,7 @@ float ImageRegistration::findTiePointLocation(TiePoint *tiePt, unsigned int wind
 		throw RegistrationException("The overlap needs to be defined before tie location can be defined.");
 	}
 	
-	rsgis::img::ImageUtils imgUtils;
+	ImageUtils imgUtils;
 	try 
 	{
 		// Setup overlapping region variables.
@@ -262,7 +262,7 @@ float ImageRegistration::findTiePointLocation(TiePoint *tiePt, unsigned int wind
 		float subPixelXMetric = currentMetricVal;
 		float subPixelYMetric = currentMetricVal;
 		
-		rsgis::math::PolyFit polyFit;
+		PolyFit polyFit;
 								
 		// Find subpixel component
 		if(searchArea == 1)
@@ -393,7 +393,7 @@ float ImageRegistration::findTiePointLocation(TiePoint *tiePt, unsigned int wind
 		delete[] dsOffsets[1];
 		delete[] dsOffsets;
 	}
-	catch (rsgis::img::ImageBandException &e) 
+	catch (ImageBandException &e) 
 	{
 		throw RegistrationException(e.what());
 	}
@@ -414,7 +414,7 @@ float ImageRegistration::findTiePointLocation(TiePoint *tiePt, unsigned int wind
 		throw RegistrationException("The overlap needs to be defined before tie location can be defined.");
 	}
 	
-	rsgis::img::ImageUtils imgUtils;
+	ImageUtils imgUtils;
 	try
 	{
 		// Setup overlapping region variables.
@@ -556,7 +556,7 @@ float ImageRegistration::findTiePointLocation(TiePoint *tiePt, unsigned int wind
 		float subPixelXMetric = currentMetricVal;
 		float subPixelYMetric = currentMetricVal;
 		
-		rsgis::math::PolyFit polyFit;
+		PolyFit polyFit;
 		
 		// Find subpixel component
 		if(searchArea == 1)
@@ -670,7 +670,7 @@ float ImageRegistration::findTiePointLocation(TiePoint *tiePt, unsigned int wind
 		delete[] dsOffsets[1];
 		delete[] dsOffsets;
 	}
-	catch (rsgis::img::ImageBandException &e)
+	catch (ImageBandException &e)
 	{
 		throw RegistrationException(e.what());
 	}
@@ -828,7 +828,7 @@ void ImageRegistration::getImageOverlapFloat(GDALDataset **datasets, int numDS, 
 	/**
 	 Get the overlap of two images. Like getImageOverlap in image utils, however the offsets are retured as floats.
 		*/
-	rsgis::img::ImageUtils imageUtils;
+	ImageUtils imageUtils;
 	
 	double **transformations = new double*[numDS];
 	int *xSize = new int[numDS];
@@ -1214,7 +1214,7 @@ void ImageRegistration::getImageOverlapWithFloatShift(float xShift, float yShift
 
 void ImageRegistration::removeTiePointsWithLowStdDev(std::list<TiePoint*> *tiePts, unsigned int windowSize, float stdDevRefThreshold, float stdDevFloatThreshold)
 {
-	rsgis::img::ImageUtils imgUtils;
+	ImageUtils imgUtils;
 	
 	int **dsOffsets = new int*[2];
 	dsOffsets[0] = new int[2];
@@ -1282,7 +1282,7 @@ void ImageRegistration::removeTiePointsWithLowStdDev(std::list<TiePoint*> *tiePt
 			delete[] floatDataBlock;
 		}
 	}
-	catch (rsgis::img::ImageBandException &e) 
+	catch (ImageBandException &e) 
 	{
 		throw RegistrationException(e.what());
 	}
