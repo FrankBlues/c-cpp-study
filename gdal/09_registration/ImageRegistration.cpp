@@ -261,6 +261,7 @@ float ImageRegistration::findTiePointLocation(TiePoint *tiePt, unsigned int wind
 		float subPixelYShift = 0;
 		float subPixelXMetric = currentMetricVal;
 		float subPixelYMetric = currentMetricVal;
+		std::cout << "currentMetricVal:" << currentMetricVal << std::endl;
 		
 		PolyFit polyFit;
 								
@@ -1261,8 +1262,9 @@ void ImageRegistration::removeTiePointsWithLowStdDev(std::list<TiePoint*> *tiePt
 			}
 			
 			refStdDev = this->calcStdDev(refDataBlock, numRefDataVals, overlap->numRefBands);
+			// std::cout << refStdDev << "\t";
 			floatStdDev = this->calcStdDev(floatDataBlock, numFloatDataVals, overlap->numRefBands);
-							
+			// std::cout << floatStdDev << std::endl;
 			if((refStdDev < stdDevRefThreshold) | (floatStdDev < stdDevFloatThreshold))
 			{
 				delete *iterTiePts;

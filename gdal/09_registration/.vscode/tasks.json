@@ -9,7 +9,7 @@
           {
             "label": "cmake",
             "type": "shell",
-            "command": "cmake -DCMAKE_BUILD_TYPE=debug ..",
+            "command": "cmake -DCMAKE_BUILD_TYPE=release ..",
             "dependsOn": ["mkdir"], 
             "options": {
               "cwd": "${workspaceFolder}/build" 

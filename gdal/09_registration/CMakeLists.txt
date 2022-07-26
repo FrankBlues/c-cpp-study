@@ -47,7 +47,9 @@ add_subdirectory(utils)
 
 add_library(ImageRegistration BasicImageRegistration.cpp BasicImageRegistration.h 
   ImageRegistration.cpp ImageRegistration.h ImageSimilarityMetric.h 
-  StandardImageSimilarityMetrics.cpp StandardImageSimilarityMetrics.h)
+  StandardImageSimilarityMetrics.cpp StandardImageSimilarityMetrics.h 
+  GCPImg2MapNode.cpp GCPImg2MapNode.h 
+  AddGCPsGDAL.cpp AddGCPsGDAL.h)
 target_link_libraries(ImageRegistration ${COMMON_LIB_NAME} ${EXCEPTIONS_LIB_NAME} ${IMG_LIB_NAME} ${MATHS_LIB_NAME} ${BOOST_LIBRARIES} ${GDAL_LIBRARIES} ${GSL_LIBRARIES})
 
 # list(APPEND EXTRA_LIBS BasicException MathException ImageException ImageCalcException CalcImageValue ImageSimilarityMetric)

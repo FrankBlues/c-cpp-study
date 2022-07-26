@@ -3,17 +3,19 @@
 #include "StandardImageSimilarityMetrics.h"
 // #include "exception/BasicException.h"
 #include "BasicImageRegistration.h"
+#include "AddGCPsGDAL.h"
 
 int main()
 {
-    std::string inputReferenceImage = "/data/DOM/2J_DOM.tif";
-    std::string inputFloatingmage = "/data/DATA/GF2_PMS1_E110.0_N34.0_20200727_L1A0004953380/GF2_PMS1_E110.0_N34.0_20200727_L1A0004953380-PAN1.tiff";
-    int gcpGap = 600;
-    float metricThreshold = 0.4;
-    int windowSize = 50;
-    int searchArea = 70;
-    float stdDevRefThreshold = 2;
-    float stdDevFloatThreshold = 2;
+    std::string inputReferenceImage = "/data/DOM/resample/refdom.tif";
+    std::string inputFloatingmage = "/data/DATA/resample/GF2_PMS1_E110.0_N34.0_20200727_L1A0004953380-PAN1-p1.tif";
+    std::string outputGCPImage = "/data/gcp7.tif";
+    int gcpGap = 1000;
+    float metricThreshold = 0.4;  //0.4
+    int windowSize = 70;  // 256
+    int searchArea = 80;  // 150
+    float stdDevRefThreshold = 15;
+    float stdDevFloatThreshold = 30;
     int subPixelResolution = 4;
     unsigned int metricTypeInt = 4;
     unsigned int outputType = 3;
@@ -85,9 +87,12 @@ int main()
     }
     
     delete similarityMetric;
-    // delete regImgs;
+    delete regImgs;
     
     GDALClose(inRefDataset);
     GDALClose(inFloatDataset);
+
+    // GDALDataType gdalType = GDT_UInt16;
+    AddGCPsGDAL(inputFloatingmage, outputGCPFile, outputGCPImage, "GTiff", GDT_UInt16);
 
 }
