@@ -1,4 +1,3 @@
-
 #include <iostream>
 #include <string>
 using std::string;
@@ -15,7 +14,24 @@ int main()
             cout << line << endl;
         if (!line.size() > 80)
             cout << line << endl;
+        
+        for(auto &c : line)
+            if (!ispunct(c))
+                cout << c;
+        cout << endl;
+        cout << line << endl;
+
+
+        // toupper
+        line[0] = toupper(line[0]);
+        cout << line << endl;
+        for(decltype(line.size()) index = 0;
+            index != line.size() && !isspace(line[index]); ++ index)
+            line[index] = toupper(line[index]);  // upper first word
+        cout << line << endl;
     }
     cout << endl;
+		
+	
     return 0;
 }

@@ -36,4 +36,88 @@ int main()
     // }
 
     cout << endl;
+		
+		
+		int ia[3][4];
+    int v = 1;
+    for(auto &row: ia)
+    {
+        for(auto &col: row)
+        {
+            col = v;
+            ++v;
+        }
+    }
+    // use a range for
+    for(int (&row)[4]: ia)
+    {
+        for(int &col: row)
+        {
+            cout << col << " ";
+        }
+        cout << endl;
+    }
+
+    // use subscripts
+    for(size_t row = 0; row < 3 ; ++row)
+    {
+        for(size_t col = 0; col < 4; ++col)
+        {
+            cout << ia[row][col] << " ";
+        }
+        cout << endl;
+    }
+
+    // use pointer
+    for(int (*p)[4] = ia; p < ia + 3; ++p)
+    {
+        for(int *q = *p; q < *p + 4; ++q)
+        {
+            cout << *q << " ";
+        }
+        cout << endl;
+    }
+
+    using int_array = int[4];
+    typedef int int_array[4];
+
+    // use a range for
+    for(auto &row: ia)
+    {
+        for(auto &col: row)
+        {
+            cout << col << " ";
+        }
+        cout << endl;
+    }
+
+    // use subscripts
+    for(auto row = 0; row < 3 ; ++row)
+    {
+        for(auto col = 0; col < 4; ++col)
+        {
+            cout << ia[row][col] << " ";
+        }
+        cout << endl;
+    }
+
+    // use pointer
+    for(int_array *p = ia; p < ia + 3; ++p)
+    {
+        for(int *q = *p; q < *p + 4; ++q)
+        {
+            cout << *q << " ";
+        }
+        cout << endl;
+    }
+
+    // use pointer
+    for(auto *p = ia; p < ia + 3; ++p)
+    {
+        for(auto *q = *p; q < *p + 4; ++q)
+        {
+            cout << *q << " ";
+        }
+        cout << endl;
+    }
 }
