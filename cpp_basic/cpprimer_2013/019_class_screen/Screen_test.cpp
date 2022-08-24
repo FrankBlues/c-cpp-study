@@ -4,11 +4,10 @@
 using std::cout;
 int main(int argc, char const *argv[])
 {
-    Screen myscreen;
-    char ch = myscreen.get();
-    // char ch = myscreen.get(0, 0);
-    myscreen.move(4, 0).set('#');
-    cout << ch << std::endl;
-    Window_mgr wmgr;
+    Screen myScreen(5, 5, 'X');
+    myScreen.move(4,0).set('#').display(cout);
+    cout << "\n";
+    myScreen.display(cout);
+    cout << "\n";
     return 0;
 }

@@ -7,9 +7,9 @@ class Screen
 {
     // 把Window_mgr类指定为友元，Window类可访问Screen的私有部分
     // 把整个类声明成友元
-    friend class Window_mgr;
+    // friend class Window_mgr;
     // 或者把其中一个方法声明成友元
-    // friend void Window_mgr::clear(Window_mgr::ScreenIndex);
+    friend void Window_mgr::clear(Window_mgr::ScreenIndex);
 public:
     typedef std::string::size_type pos;
     // using pos = std::string::size_type;
@@ -28,12 +28,15 @@ public:
     // 根据对象是否是const重载了display函数
     Screen &display(std::ostream &os){do_display(os); return *this;}
     const Screen &display(std::ostream &os) const {do_display(os); return *this;}
+		
+	void some_member() const;
 private:
     pos cursor = 0;
     pos height = 0, width = 0;
     std::string contents;
 
     void do_display(std::ostream &os) const {os << contents;}
+	mutable size_t access_ctr = 0; // may change even in a const object
 };
 
 
@@ -62,6 +65,12 @@ inline Screen &Screen::set(pos r, pos col, char ch)
 {
     contents[r*width + col] = ch;  // 设置给定位置的新值
     return *this;
+}
+
+void Screen::some_member() const
+{
+	++access_ctr;  // 可以被改变
+    std::cout << access_ctr << std::endl;
 }
 
 #endif
