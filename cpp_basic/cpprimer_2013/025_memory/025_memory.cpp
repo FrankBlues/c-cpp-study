@@ -5,6 +5,8 @@
 #include <new>
 
 #include "StrBlob.h"
+#include "TextQuery.h"
+#include "QueryResult.h"
 
 using namespace std;
 
@@ -113,30 +115,45 @@ void exercise1223()
     cout << s1 + s2 << endl;
 }
 
-void allocator()
+// void allocator()
+// {
+//     int n = 20;
+//     allocator<string> alloc; // object that can allocate strings
+//     auto const p = alloc.allocate(n); // allocate n unconstructed strings
+
+//     auto q = p; // q will point to one past the last constructed element
+//     alloc.construct(q++); // *q is the empty string
+//     alloc.construct(q++, 10, 'c'); // *q is cccccccccc
+//     alloc.construct(q++, "hi"); // *q is hi!
+
+//     cout << *(p+2) << endl;  // p+1 cccccccccc  p+2 hi
+//     cout << p << endl << q << endl;
+
+//     while (q != p)
+//         alloc.destroy(--q); // free the strings we actually allocated
+
+//     alloc.deallocate(p, n);
+
+//     // construct elements starting at p as copies of elements in vi
+//     vector<string> svec{"aa", "bb", "cc"};
+//     auto p1 = uninitialized_copy(svec.begin(), svec.end(), p);
+//     // initialize the remaining elements
+//     uninitialized_fill_n(p1, svec.size(), "dd");
+// }
+
+void runQueries(ifstream &infile)
 {
-    int n = 20;
-    allocator<string> alloc; // object that can allocate strings
-    auto const p = alloc.allocate(n); // allocate n unconstructed strings
-
-    auto q = p; // q will point to one past the last constructed element
-    alloc.construct(q++); // *q is the empty string
-    alloc.construct(q++, 10, 'c'); // *q is cccccccccc
-    alloc.construct(q++, "hi"); // *q is hi!
-
-    cout << *(p+2) << endl;  // p+1 cccccccccc  p+2 hi
-    cout << p << endl << q << endl;
-
-    while (q != p)
-        alloc.destroy(--q); // free the strings we actually allocated
-
-    alloc.deallocate(p, n);
-
-    // construct elements starting at p as copies of elements in vi
-    vector<string> svec{"aa", "bb", "cc"};
-    auto p1 = uninitialized_copy(svec.begin(), svec.end(), p);
-    // initialize the remaining elements
-    uninitialized_fill_n(p1, svec.size(), "dd");
+    // infile is an ifstream that is the file we want to query
+    TextQuery tq(infile); // store the file and build the query map
+    // iterate with the user: prompt for a word to find and print results
+    while (true) {
+        cout << "enter word to look for, or q to quit: ";
+        string s;
+        // stop if we hit end-of-file on the input or if a 'q' is entered
+        if (!(cin >> s) || s == "q") break;
+        // run the query and print the results
+        print(cout, tq.query(s)) << endl;
+    }
 }
 
 int main(int argc, char const *argv[])
@@ -145,6 +162,9 @@ int main(int argc, char const *argv[])
     // exercise127_2();
     // exercise1220();
     // exercise1223();
+
+    auto is = ifstream("./spa.txt");
+    runQueries(is);
 
     
 
