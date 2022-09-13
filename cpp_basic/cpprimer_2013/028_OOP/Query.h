@@ -14,19 +14,14 @@ class Query
     friend Query operator~(const Query &);
     friend Query operator|(const Query&, const Query&);
     friend Query operator&(const Query&, const Query&);
+
 public:
     Query(const std::string&); // builds a new WordQuery
+    
     // interface functions: call the corresponding Query_base operations
     QueryResult eval(const TextQuery &t) const
     { return q->eval(t); }
     std::string rep() const { return q->rep(); }
-
-    std::ostream &
-    operator<<(std::ostream &os, const Query &query)
-    {
-        // Query::rep makes a virtual call through its Query_base pointer to rep()
-        return os << query.rep();
-    }
 
 private:
     Query(std::shared_ptr<Query_base> query): q(query) { }
@@ -35,7 +30,13 @@ private:
 };
 
 inline
-Query::Query(const std::string&): q(new WordQuery(s)){}
+Query::Query(const std::string &s): q(new WordQuery(s)){}
 
+inline std::ostream&
+operator << (std::ostream& os, const Query& query)
+{
+    // make a virtual call through its Query_base pointer to rep();
+    return os << query.rep();
+}
 
 #endif

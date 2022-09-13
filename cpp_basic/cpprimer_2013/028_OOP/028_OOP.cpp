@@ -6,6 +6,11 @@
 #include "Bulk_quote.h"
 #include "TextQuery.h"
 #include "QueryResult.h"
+#include "Query.h"
+#include "Query_base.h"
+#include "OrQuery.h"
+#include "AndQuery.h"
+#include "NotQuery.h"
 
 
 using namespace std;
@@ -23,15 +28,15 @@ void runQueries(ifstream &infile)
         // stop if we hit end-of-file on the input or if a 'q' is entered
         if (!(cin >> s) || s == "q") break;
         // run the query and print the results
-        print(cout, tq.query(s)) << endl;
+        std::cout << tq.query(s) << endl;
     }
 }
 
 int main(int argc, char const *argv[])
 {
     // ex15.6
-    Quote q("textbook", 10.60);
-    Bulk_quote bq("textbook", 10.60, 15, 0.3);
+    // Quote q("textbook", 10.60);
+    // Bulk_quote bq("textbook", 10.60, 15, 0.3);
 
     // print_total(std::cout, q, 12);
     // print_total(std::cout, bq, 12);
@@ -60,18 +65,24 @@ int main(int argc, char const *argv[])
     // cout << sqvec[0]->net_price(15) << endl;
     // cout << sqvec[1]->net_price(15) << endl; // print the derived part
 
-    auto is = ifstream("./spa.txt");
-    runQueries(is);
+    // auto is = ifstream("./spa.txt");
+    // runQueries(is);
+    // Ex1539
+    std::ifstream file("test.txt");
+    TextQuery tQuery(file);
+    Query q = Query("when")  | Query("but") | Query("there");
+
+    std::cout << q.eval(tQuery);
 
     return 0;
 }
 
-double print_total(std::ostream &os, const Quote &item, std::size_t n)
-{
-    double ret = item.net_price(n);
-    os << "ISBN:" << item.isbn()
-       << "# sold: " << n << " total due: " << ret << std::endl;
-    return ret;
-}
+// double print_total(std::ostream &os, const Quote &item, std::size_t n)
+// {
+//     double ret = item.net_price(n);
+//     os << "ISBN:" << item.isbn()
+//        << "# sold: " << n << " total due: " << ret << std::endl;
+//     return ret;
+// }
 
 
