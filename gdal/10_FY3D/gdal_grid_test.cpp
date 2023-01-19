@@ -29,8 +29,6 @@ int main(int argc, char const *argv[])
     int sizeY = static_cast<int>(dfYSize);
 
     GDALDataType eType = GDT_Float32;
-    const int nDataTypeSize = GDALGetDataTypeSizeBytes(eType);
-
     // 栅格数据集
     GDALDriverH hDriver = GDALGetDriverByName("GTiff");
     int nBands = 1;
@@ -39,14 +37,8 @@ int main(int argc, char const *argv[])
         GDALCreate(hDriver, pszDest, sizeX, sizeY, nBands, eType, NULL);
 
     // nodata
-    for (int i = 1; i <= nBands; i++)
-    {
-        GDALRasterBandH hBand = GDALGetRasterBand(hDstDS, i);
-        GDALSetRasterNoDataValue(hBand, 0.0);
-    }
-
     GDALRasterBandH hBand = GDALGetRasterBand(hDstDS, 1);
-
+    GDALSetRasterNoDataValue(hBand, 0.0);
 
     // 插值参数
     void *pOptions;
@@ -60,6 +52,7 @@ int main(int argc, char const *argv[])
 
     // 数据空间
     void *pData;
+    const int nDataTypeSize = GDALGetDataTypeSizeBytes(eType);
     pData = malloc(sizeX * sizeY * nDataTypeSize);
     // pData = new float[sizeX * sizeY];
 
